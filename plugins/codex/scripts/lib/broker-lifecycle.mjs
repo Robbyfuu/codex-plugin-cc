@@ -56,6 +56,83 @@ export async function sendBrokerShutdown(endpoint) {
   });
 }
 
+/**
+ * Ask a running broker to interrupt its active turn and restart its codex
+ * child, recovering a wedged single-flight slot without tearing down the whole
+ * session. Best-effort: resolves with `{ recovered, owned }` and never throws.
+ *
+ * Pass `threadId` to scope the recovery to a specific job: the broker only
+ * restarts the child when that thread owns the active slot, so cancelling one
+ * job never kills another job's in-flight turn. Omit `threadId` to recover only
+ * when the broker is idle/unowned.
+ *
+ * @param {string | null | undefined} endpoint
+ * @param {{ threadId?: string | null, timeoutMs?: number }} [options]
+ * @returns {Promise<{ recovered: boolean, owned?: boolean, detail?: string }>}
+ */
+export async function sendBrokerRecover(endpoint, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const threadId = options.threadId ?? null;
+  if (!endpoint) {
+    return { recovered: false, detail: "no broker endpoint" };
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.end();
+      } catch {
+        // socket may already be closing
+      }
+      resolve(value);
+    };
+
+    let socket;
+    try {
+      socket = connectToEndpoint(endpoint);
+    } catch (error) {
+      resolve({ recovered: false, detail: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    const timer = setTimeout(() => finish({ recovered: false, detail: "broker recover timed out" }), timeoutMs);
+    timer.unref?.();
+
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => {
+      const params = threadId ? { threadId } : {};
+      socket.write(`${JSON.stringify({ id: 1, method: "broker/recover", params })}\n`);
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex === -1) {
+        return;
+      }
+      const line = buffer.slice(0, newlineIndex);
+      try {
+        const message = JSON.parse(line);
+        finish({
+          recovered: Boolean(message?.result?.recovered),
+          owned: message?.result?.owned,
+          detail: message?.error?.message
+        });
+      } catch {
+        finish({ recovered: false, detail: "invalid broker recover response" });
+      }
+    });
+    socket.on("error", (error) => finish({ recovered: false, detail: error instanceof Error ? error.message : String(error) }));
+    socket.on("close", () => finish({ recovered: false, detail: "broker closed before responding" }));
+  });
+}
+
 export function spawnBrokerProcess({ scriptPath, cwd, endpoint, pidFile, logFile, env = process.env }) {
   const logFd = fs.openSync(logFile, "a");
   const child = spawn(process.execPath, [scriptPath, "serve", "--endpoint", endpoint, "--cwd", cwd, "--pid-file", pidFile], {

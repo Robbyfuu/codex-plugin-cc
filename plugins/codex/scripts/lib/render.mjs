@@ -142,8 +142,13 @@ function pushJobDetails(lines, job, options = {}) {
   if (resumeCommand) {
     lines.push(`  Resume in Codex: ${resumeCommand}`);
   }
-  if (job.logFile && options.showLog) {
-    lines.push(`  Log: ${job.logFile}`);
+  const liveLogPath = job.liveLog ?? job.logFile;
+  if (liveLogPath && options.showLog) {
+    lines.push(`  Live log: ${liveLogPath}`);
+    if (job.status === "queued" || job.status === "running") {
+      lines.push(`  Tail: tail -F ${liveLogPath}`);
+      lines.push(`  Watch pane: /codex:watch ${job.id}`);
+    }
   }
   if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
     lines.push(`  Cancel: /codex:cancel ${job.id}`);

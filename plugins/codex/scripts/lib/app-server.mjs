@@ -15,6 +15,7 @@ import readline from "node:readline";
 import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
+import { CodexTimeoutError, resolveTimeouts } from "./watchdog.mjs";
 
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
 const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"));
@@ -53,7 +54,7 @@ function createProtocolError(message, data) {
   return error;
 }
 
-class AppServerClientBase {
+export class AppServerClientBase {
   constructor(cwd, options = {}) {
     this.cwd = cwd;
     this.options = options;
@@ -66,6 +67,7 @@ class AppServerClientBase {
     this.notificationHandler = null;
     this.lineBuffer = "";
     this.transport = "unknown";
+    this.requestTimeoutMs = resolveTimeouts(options.env ?? process.env).requestTimeoutMs;
 
     this.exitPromise = new Promise((resolve) => {
       this.resolveExit = resolve;
@@ -91,9 +93,45 @@ class AppServerClientBase {
     this.nextId += 1;
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, method });
-      this.sendMessage({ id, method, params });
+      // Last-resort backstop so a request whose reply never arrives cannot hang
+      // forever. The turn idle watchdog is the real stall catcher; this ceiling
+      // is intentionally generous so it never kills a legitimately long turn.
+      let timer = null;
+      if (Number.isFinite(this.requestTimeoutMs) && this.requestTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          const entry = this.pending.get(id);
+          if (!entry) {
+            return;
+          }
+          this.pending.delete(id);
+          entry.reject(
+            new CodexTimeoutError(
+              `codex app-server ${method} timed out after ${this.requestTimeoutMs}ms.`,
+              { method, timeoutMs: this.requestTimeoutMs }
+            )
+          );
+        }, this.requestTimeoutMs);
+        timer.unref?.();
+      }
+      const entry = { resolve, reject, method, timer };
+      this.pending.set(id, entry);
+      try {
+        this.sendMessage({ id, method, params });
+      } catch (error) {
+        // Transport failed before the request even went out: clean up the timer
+        // and pending slot so neither leaks, then surface the send error.
+        this.pending.delete(id);
+        this.clearPendingTimer(entry);
+        reject(error);
+      }
     });
+  }
+
+  clearPendingTimer(pending) {
+    if (pending?.timer) {
+      clearTimeout(pending.timer);
+      pending.timer = null;
+    }
   }
 
   notify(method, params = {}) {
@@ -138,6 +176,7 @@ class AppServerClientBase {
         return;
       }
       this.pending.delete(message.id);
+      this.clearPendingTimer(pending);
 
       if (message.error) {
         pending.reject(createProtocolError(message.error.message ?? `codex app-server ${pending.method} failed.`, message.error));
@@ -168,6 +207,7 @@ class AppServerClientBase {
     this.exitError = error ?? null;
 
     for (const pending of this.pending.values()) {
+      this.clearPendingTimer(pending);
       pending.reject(this.exitError ?? new Error("codex app-server connection closed."));
     }
     this.pending.clear();

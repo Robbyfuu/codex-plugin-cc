@@ -163,6 +163,9 @@ export function enrichJob(job, options = {}) {
   const enriched = {
     ...job,
     kindLabel: getJobTypeLabel(job),
+    // Absolute path to the live event log so the operator can `tail -F` it while
+    // the turn is running.
+    liveLog: job.logFile ?? null,
     progressPreview:
       job.status === "queued" || job.status === "running" || job.status === "failed"
         ? readJobProgressPreview(job.logFile, maxProgressLines)

@@ -1,0 +1,8 @@
+{
+  "name": "codex-plugin-cc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -15,3 +15,5 @@ If the user did not pass a job ID:
 If the user did pass a job ID:
 - Present the full command output to the user.
 - Do not summarize or condense it.
+
+For active (queued or running) jobs, the output includes a `Live log:` line with the absolute path to the per-job event log, plus a `Tail:` hint (`tail -F <path>`) and a `Watch pane:` hint (`/codex:watch <job-id>`). Preserve these so the user can follow the turn live as it happens instead of waiting for it to finish.

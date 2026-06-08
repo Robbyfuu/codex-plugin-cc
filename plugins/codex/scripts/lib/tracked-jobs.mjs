@@ -1,9 +1,27 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { openWatchPane, resolvePaneMarkerFile } from "./live-view.mjs";
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+
+/**
+ * Remove the auto-pane marker so a future run of the same job/log can reopen a
+ * fresh pane. Best-effort: a missing marker or unlink failure is ignored.
+ *
+ * @param {string | null | undefined} logFile
+ */
+function clearPaneMarker(logFile) {
+  if (!logFile) {
+    return;
+  }
+  try {
+    fs.rmSync(resolvePaneMarkerFile(logFile), { force: true });
+  } catch {
+    // Best-effort cleanup — never let marker removal disturb job finalization.
+  }
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -38,14 +56,24 @@ export function appendLogLine(logFile, message) {
   if (!logFile || !normalized) {
     return;
   }
-  fs.appendFileSync(logFile, `[${nowIso()}] ${normalized}\n`, "utf8");
+  // Best-effort live tee: a logging failure (full disk, unwritable path) must
+  // never abort an in-flight Codex turn.
+  try {
+    fs.appendFileSync(logFile, `[${nowIso()}] ${normalized}\n`, "utf8");
+  } catch {
+    // swallow — visibility is best-effort
+  }
 }
 
 export function appendLogBlock(logFile, title, body) {
   if (!logFile || !body) {
     return;
   }
-  fs.appendFileSync(logFile, `\n[${nowIso()}] ${title}\n${String(body).trimEnd()}\n`, "utf8");
+  try {
+    fs.appendFileSync(logFile, `\n[${nowIso()}] ${title}\n${String(body).trimEnd()}\n`, "utf8");
+  } catch {
+    // swallow — visibility is best-effort
+  }
 }
 
 export function createJobLogFile(workspaceRoot, jobId, title) {
@@ -151,6 +179,10 @@ export async function runTrackedJob(job, runner, options = {}) {
   writeJobFile(job.workspaceRoot, job.id, runningRecord);
   upsertJob(job.workspaceRoot, runningRecord);
 
+  // Auto-open a tmux pane tailing the live log (guarded so only one pane opens
+  // per job). Best-effort: openWatchPane never throws.
+  openWatchPane(runningRecord.logFile);
+
   try {
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
@@ -177,6 +209,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       completedAt
     });
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
+    clearPaneMarker(runningRecord.logFile);
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -199,6 +232,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       errorMessage,
       completedAt
     });
+    clearPaneMarker(runningRecord.logFile);
     throw error;
   }
 }

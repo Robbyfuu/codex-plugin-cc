@@ -23,6 +23,9 @@ import {
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { loadBrokerSession, sendBrokerRecover } from "./lib/broker-lifecycle.mjs";
+import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
+import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
@@ -80,7 +83,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
+      "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
+      "  node scripts/codex-companion.mjs watch [job-id] [--json]"
     ].join("\n")
   );
 }
@@ -917,6 +921,106 @@ function handleTaskResumeCandidate(argv) {
   outputCommandResult(payload, rendered, options.json);
 }
 
+function resolveBrokerEndpointForCancel(workspaceRoot) {
+  return process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(workspaceRoot)?.endpoint ?? null;
+}
+
+async function recoverBrokerForCancel(workspaceRoot, options = {}) {
+  const { logFile = null, threadId = null } = options;
+  const endpoint = resolveBrokerEndpointForCancel(workspaceRoot);
+  if (!endpoint) {
+    return { attempted: false, recovered: false };
+  }
+  // Scope the recovery to the cancelled job's thread so we never restart the
+  // shared child while a DIFFERENT job owns the active slot.
+  const result = await sendBrokerRecover(endpoint, { threadId });
+  appendLogLine(
+    logFile,
+    result.recovered
+      ? "Recovered the shared Codex broker runtime."
+      : result.owned === false
+        ? "Shared Codex broker is busy with another job; left its runtime untouched."
+        : `Shared Codex broker recovery did not confirm${result.detail ? `: ${result.detail}` : "."}`
+  );
+  return { attempted: true, recovered: result.recovered, owned: result.owned };
+}
+
+async function handleCancelWithoutJob(cwd, options) {
+  // No tracked job is active, but a wedged broker can still be holding the
+  // single-flight slot. With no threadId the broker only restarts when its slot
+  // is idle/unowned, so this can never disturb another job's live turn.
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const broker = await recoverBrokerForCancel(workspaceRoot);
+  if (!broker.attempted) {
+    throw new Error("No active Codex jobs to cancel.");
+  }
+  const payload = {
+    jobId: null,
+    status: "no-active-job",
+    brokerRecoveryAttempted: broker.attempted,
+    brokerRecovered: broker.recovered
+  };
+  const rendered = broker.recovered
+    ? "No active Codex job, but the shared Codex broker runtime was recovered.\n"
+    : "No active Codex job. Attempted to recover the shared Codex broker runtime.\n";
+  outputCommandResult(payload, rendered, options.json);
+}
+
+function resolveWatchTargetJob(workspaceRoot, reference) {
+  const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
+  if (reference) {
+    const exact = jobs.find((job) => job.id === reference || job.id.startsWith(reference));
+    if (!exact) {
+      throw new Error(`No job found for "${reference}". Run /codex:status to list jobs.`);
+    }
+    return exact;
+  }
+  const active = jobs.find((job) => (job.status === "queued" || job.status === "running") && job.logFile);
+  if (active) {
+    return active;
+  }
+  return jobs.find((job) => job.logFile) ?? null;
+}
+
+async function handleWatch(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const reference = positionals[0] ?? "";
+  const job = resolveWatchTargetJob(workspaceRoot, reference);
+
+  if (!job) {
+    const payload = { opened: false, reason: "no-job" };
+    outputCommandResult(payload, "No Codex job with a live log was found for this session.\n", options.json);
+    return;
+  }
+
+  if (!isWatchPaneEnabled(process.env)) {
+    const payload = { opened: false, reason: "no-tmux", jobId: job.id, liveLog: job.logFile ?? null };
+    const rendered = job.logFile
+      ? `Not inside tmux (or watch panes disabled). Tail the live log manually:\n  tail -F ${job.logFile}\n`
+      : "Not inside tmux (or watch panes disabled), and no live log is available.\n";
+    outputCommandResult(payload, rendered, options.json);
+    return;
+  }
+
+  const result = openWatchPane(job.logFile, { force: true });
+  const payload = {
+    opened: result.opened,
+    reason: result.reason ?? null,
+    jobId: job.id,
+    liveLog: job.logFile ?? null
+  };
+  const rendered = result.opened
+    ? `Opened a tmux pane tailing ${job.logFile} for job ${job.id}.\n`
+    : `Could not open a tmux pane (${result.reason ?? "unknown"}). Tail manually:\n  tail -F ${job.logFile}\n`;
+  outputCommandResult(payload, rendered, options.json);
+}
+
 async function handleCancel(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -925,7 +1029,23 @@ async function handleCancel(argv) {
 
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
-  const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
+
+  let workspaceRoot;
+  let job;
+  try {
+    ({ workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env }));
+  } catch (error) {
+    // Only fall back to broker-only recovery when there simply is no active job
+    // (so a wedged broker can still be unblocked). Ambiguous-reference and
+    // "multiple jobs active" errors must still surface so the user disambiguates.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!reference && /no active codex jobs to cancel/i.test(message)) {
+      await handleCancelWithoutJob(cwd, options);
+      return;
+    }
+    throw error;
+  }
+
   const existing = readStoredJob(workspaceRoot, job.id) ?? {};
   const threadId = existing.threadId ?? job.threadId ?? null;
   const turnId = existing.turnId ?? job.turnId ?? null;
@@ -941,6 +1061,25 @@ async function handleCancel(argv) {
   }
 
   terminateProcessTree(job.pid ?? Number.NaN);
+
+  // A killed job PID does not kill the broker's codex child. Force the broker to
+  // interrupt + restart its runtime so a wedged single-flight slot recovers now.
+  // Scope it to THIS job's thread so we never restart the shared child while a
+  // different job owns the active slot. Only meaningful for a job that was
+  // actually running a turn (has a threadId); otherwise it owns no broker slot.
+  //
+  // KNOWN LIMITATION (detached review): for a DETACHED `/codex:review` this
+  // threadId is the reviewThreadId (captureTurn promotes it to state.threadId),
+  // while the broker keys its slot on the source thread until the review/start
+  // response resolves and adds both ids. So a detached cancel recovers in steady
+  // state but can no-op if it lands inside that brief review/start window. The
+  // inline `/codex:review` path is unaffected. See the matching note at
+  // broker/recover in app-server-broker.mjs.
+  const brokerRecovery =
+    threadId && job.status === "running"
+      ? await recoverBrokerForCancel(workspaceRoot, { logFile: job.logFile, threadId })
+      : { attempted: false, recovered: false };
+
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();
@@ -972,7 +1111,9 @@ async function handleCancel(argv) {
     status: "cancelled",
     title: job.title,
     turnInterruptAttempted: interrupt.attempted,
-    turnInterrupted: interrupt.interrupted
+    turnInterrupted: interrupt.interrupted,
+    brokerRecoveryAttempted: brokerRecovery.attempted,
+    brokerRecovered: brokerRecovery.recovered
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
@@ -1014,6 +1155,9 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "watch":
+      await handleWatch(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

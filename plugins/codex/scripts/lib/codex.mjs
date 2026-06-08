@@ -34,10 +34,19 @@
  *   onProgress: ProgressReporter | null
  * }} TurnCaptureState
  */
+import process from "node:process";
+
 import { readJsonFile } from "./fs.mjs";
 import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
 import { binaryAvailable } from "./process.mjs";
+import {
+  CodexStallError,
+  createIdleWatchdog,
+  resolveTimeouts,
+  IDLE_TIMEOUT_ENV,
+  MAX_TURN_ENV
+} from "./watchdog.mjs";
 
 const SERVICE_NAME = "claude_code_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
@@ -364,6 +373,16 @@ function completeTurn(state, turn = null, options = {}) {
   state.resolveCompletion(state);
 }
 
+function failTurnStalled(state, error) {
+  if (state.completed) {
+    return;
+  }
+  clearCompletionTimer(state);
+  state.completed = true;
+  state.error = state.error ?? { message: error.message };
+  state.rejectCompletion(error);
+}
+
 function scheduleInferredCompletion(state) {
   if (state.completed || state.finalTurn || !state.finalAnswerSeen) {
     return;
@@ -550,11 +569,69 @@ function applyTurnNotification(state, message) {
   }
 }
 
-async function captureTurn(client, threadId, startRequest, options = {}) {
+async function interruptStalledTurn(client, state) {
+  if (!state.threadId || !state.turnId) {
+    return;
+  }
+  try {
+    await client.request("turn/interrupt", { threadId: state.threadId, turnId: state.turnId });
+  } catch {
+    // Best-effort: the request ceiling or a dead connection may already be
+    // tearing this down. The stall rejection below is what actually unblocks
+    // the caller.
+  }
+}
+
+export async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
+  const timeouts = resolveTimeouts(options.env ?? process.env);
+
+  const watchdog = createIdleWatchdog({
+    idleMs: timeouts.idleMs,
+    maxMs: timeouts.maxTurnMs,
+    onStall() {
+      const error = new CodexStallError(
+        `Codex turn stalled: no activity for ${timeouts.idleMs}ms; ` +
+          `raise ${IDLE_TIMEOUT_ENV} to allow longer idle gaps.`,
+        { idleMs: timeouts.idleMs, reason: "idle" }
+      );
+      emitProgress(state.onProgress, error.message, "failed");
+      void interruptStalledTurn(client, state);
+      failTurnStalled(state, error);
+    },
+    onHardStop() {
+      const error = new CodexStallError(
+        `Codex turn exceeded the maximum duration of ${timeouts.maxTurnMs}ms ` +
+          `(${MAX_TURN_ENV}=${timeouts.maxTurnMs}ms); raise ${MAX_TURN_ENV} to allow longer turns.`,
+        { idleMs: timeouts.idleMs, reason: "max-duration" }
+      );
+      emitProgress(state.onProgress, error.message, "failed");
+      void interruptStalledTurn(client, state);
+      failTurnStalled(state, error);
+    }
+  });
+
+  // Keep the idle watchdog item-aware: an item that has started but not yet
+  // completed means work is legitimately in flight (the client opts out of
+  // delta notifications, so a slow command/reasoning block is silent until it
+  // finishes). Only count items that belong to this turn so a foreign thread
+  // cannot pin our guard, and drop everything on turn end.
+  function trackItemFlight(message) {
+    const itemId = message?.params?.item?.id;
+    if (itemId === undefined || itemId === null) {
+      return;
+    }
+    if (message.method === "item/started") {
+      watchdog.itemStarted(itemId);
+    } else if (message.method === "item/completed") {
+      watchdog.itemCompleted(itemId);
+    }
+  }
 
   client.setNotificationHandler((message) => {
+    watchdog.notify();
+
     if (!state.turnId) {
       state.bufferedNotifications.push(message);
       return;
@@ -572,6 +649,10 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
         return;
     }
 
+    trackItemFlight(message);
+    if (message.method === "turn/completed" && (message.params?.threadId ?? null) === state.threadId) {
+      watchdog.clearInFlight();
+    }
     applyTurnNotification(state, message);
   });
 
@@ -582,8 +663,15 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     if (state.turnId) {
       state.threadTurnIds.set(state.threadId, state.turnId);
     }
+    // Begin watching once the turn is live. Any buffered notifications already
+    // arrived, so treat the start as activity.
+    watchdog.start();
     for (const message of state.bufferedNotifications) {
       if (belongsToTurn(state, message)) {
+        trackItemFlight(message);
+        if (message.method === "turn/completed" && (message.params?.threadId ?? null) === state.threadId) {
+          watchdog.clearInFlight();
+        }
         applyTurnNotification(state, message);
       } else {
         if (previousHandler) {
@@ -599,6 +687,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 
     return await state.completion;
   } finally {
+    watchdog.stop();
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }
