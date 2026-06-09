@@ -257,6 +257,23 @@ if (args[0] !== "app-server") {
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
 saveState(bootState);
+const APP_SERVER_GENERATION = bootState.appServerStarts;
+
+// Self-heal fixtures: a process-spawn count gate lets the SAME fake binary act
+// as a wedged first child and a healthy recovered child (or an unspawnable
+// recovery target) without needing two scripts on PATH. The broker spawns each
+// codex child afresh, so APP_SERVER_GENERATION distinguishes them.
+const UNSPAWNABLE_FROM = Number(process.env.CODEX_COMPANION_FAKE_UNSPAWNABLE_FROM || 0);
+if (UNSPAWNABLE_FROM > 0 && APP_SERVER_GENERATION >= UNSPAWNABLE_FROM) {
+  // Simulate a child that cannot come up: exit before serving the handshake so
+  // the broker's recovery reconnect (initialize over stdio) fails.
+  process.stderr.write("fake codex app-server is unspawnable on recovery\\n");
+  process.exit(1);
+}
+// The wedge behaviors only wedge their FIRST app-server child. After the broker
+// restarts the child (generation 2), the fresh child serves turns normally so a
+// subsequent request can prove the broker stayed alive on a healthy child.
+const WEDGE_ACTIVE = BEHAVIOR === "wedge-silent-after-turn-start" && APP_SERVER_GENERATION === 1;
 
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -515,6 +532,16 @@ rl.on("line", (line) => {
             completed: { type: "agentMessage", id: "msg_" + turnId, text: payload, phase: "final_answer" }
           }
         ];
+
+	        if (WEDGE_ACTIVE) {
+	          // Wedged child: announce the turn, then go silent forever. No
+	          // item/started is emitted (so the broker idle guard is never paused
+	          // by an in-flight item) and the turn never completes. The stage-1
+	          // soft interrupt is ignored in the turn/interrupt handler below, so
+	          // the broker is forced into its stage-2 child restart (recovery).
+	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          break;
+	        }
 
 	        if (BEHAVIOR === "interruptible-slow-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });

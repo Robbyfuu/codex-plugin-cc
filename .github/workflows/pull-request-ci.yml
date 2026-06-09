@@ -28,8 +28,12 @@ jobs:
       - name: Install Codex CLI
         run: npm install -g @openai/codex
 
-      - name: Run test suite
+      - name: Run root test suite
         run: npm test
+
+      - name: Run plugin test suite
+        run: node --test
+        working-directory: plugins/codex
 
       - name: Run build
         run: npm run build
