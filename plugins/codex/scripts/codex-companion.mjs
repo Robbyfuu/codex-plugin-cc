@@ -35,6 +35,7 @@ import {
   upsertJob,
   writeJobFile
 } from "./lib/state.mjs";
+import { aggregateTelemetry, readTelemetry, recordTurnOutcome } from "./lib/telemetry.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -61,6 +62,7 @@ import {
   renderCancelReport,
   renderJobStatusReport,
   renderSetupReport,
+  renderStatsReport,
   renderStatusReport,
   renderTaskResult
 } from "./lib/render.mjs";
@@ -82,6 +84,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
+      "  node scripts/codex-companion.mjs stats [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
       "  node scripts/codex-companion.mjs watch [job-id] [--json]"
@@ -868,6 +871,19 @@ async function handleStatus(argv) {
   outputResult(renderStatusPayload(report, options.json), options.json);
 }
 
+function handleStats(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const records = readTelemetry({ cwd: workspaceRoot });
+  const report = aggregateTelemetry(records, { env: process.env });
+  outputResult(options.json ? report : renderStatsReport(report), options.json);
+}
+
 function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1106,6 +1122,32 @@ async function handleCancel(argv) {
     completedAt
   });
 
+  // Cancellation happens outside runTrackedJob's lifecycle (the worker process is
+  // killed), so emit the `cancelled` telemetry outcome here directly. Best-effort
+  // and wrapped so a telemetry failure can never break a cancel. startedAt is
+  // derived from the stored job's ISO timestamp; if absent we fall back to the
+  // cancel time so durationMs is a non-negative number rather than NaN.
+  try {
+    const endedAtMs = Date.parse(completedAt);
+    const startedAtMs = Date.parse(existing.startedAt ?? job.startedAt ?? completedAt) || endedAtMs;
+    recordTurnOutcome(
+      {
+        startedAt: startedAtMs,
+        endedAt: endedAtMs,
+        durationMs: Math.max(0, endedAtMs - startedAtMs),
+        exitReason: "cancelled",
+        threadId: threadId ?? null,
+        kind: job.kind ?? null,
+        title: job.title ?? null,
+        restartCount: 0
+        // usage intentionally omitted (no token/usage data is surfaced).
+      },
+      { cwd: workspaceRoot }
+    );
+  } catch {
+    // swallow — telemetry must never disturb cancellation.
+  }
+
   const payload = {
     jobId: job.id,
     status: "cancelled",
@@ -1146,6 +1188,9 @@ async function main() {
       break;
     case "status":
       await handleStatus(argv);
+      break;
+    case "stats":
+      handleStats(argv);
       break;
     case "result":
       handleResult(argv);

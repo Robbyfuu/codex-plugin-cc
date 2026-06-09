@@ -10,6 +10,7 @@ const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
+const TELEMETRY_FILE_NAME = "telemetry.jsonl";
 const MAX_JOBS = 50;
 
 function nowIso() {
@@ -188,4 +189,9 @@ export function resolveJobLogFile(cwd, jobId) {
 export function resolveJobFile(cwd, jobId) {
   ensureStateDir(cwd);
   return path.join(resolveJobsDir(cwd), `${jobId}.json`);
+}
+
+export function resolveTelemetryFile(cwd) {
+  ensureStateDir(cwd);
+  return path.join(resolveStateDir(cwd), TELEMETRY_FILE_NAME);
 }

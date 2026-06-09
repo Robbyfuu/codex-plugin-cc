@@ -3,8 +3,67 @@ import process from "node:process";
 
 import { openWatchPane, resolvePaneMarkerFile } from "./live-view.mjs";
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { recordTurnOutcome } from "./telemetry.mjs";
+import { CodexStallError } from "./watchdog.mjs";
 
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+
+/**
+ * Map a REJECTED turn into a stable exit reason for telemetry. This handles only
+ * the throw path; the resolve path (clean "completed" vs non-zero "interrupted")
+ * is classified inline in runTrackedJob's success branch by exitStatus.
+ *
+ *  - CodexStallError reason "idle"                 -> "idle-stall"
+ *  - CodexStallError reason "max-duration"         -> "hard-stop"
+ *  - everything else (a genuine thrown Error)      -> "error"
+ *
+ * NOTE: broker self-heal does NOT arrive here. The broker emits
+ * `turn/completed status:"interrupted"`, which RESOLVES the turn (the matching
+ * `error id:null` is not id-keyed, so it never rejects a pending request). That
+ * resolved-but-not-clean turn is bucketed as "interrupted" in the success branch,
+ * keeping broker churn visible as its own reason rather than masquerading as
+ * "completed" or being folded into "error".
+ *
+ * @param {unknown} error
+ * @returns {"idle-stall" | "hard-stop" | "error"}
+ */
+function classifyFailureReason(error) {
+  if (error instanceof CodexStallError) {
+    if (error.reason === "max-duration") {
+      return "hard-stop";
+    }
+    if (error.reason === "idle") {
+      return "idle-stall";
+    }
+  }
+  return "error";
+}
+
+/**
+ * Single fan-out point for a finished turn. Each consumer is invoked inside its
+ * own try/catch so one consumer failing can never (a) throw into the turn
+ * lifecycle, nor (b) starve the other consumers. Telemetry is the only consumer
+ * in v1; this is the deliberate EXTENSION POINT — a later feature (e.g. a
+ * metrics emitter or notifier) registers another independent, try/caught block
+ * right here, reading from the same `outcome` object.
+ *
+ * @param {object} outcome canonical per-turn outcome (see runTrackedJob)
+ * @param {{ cwd: string, telemetryRecorder?: typeof recordTurnOutcome }} context
+ */
+function emitTurnOutcome(outcome, { cwd, telemetryRecorder = recordTurnOutcome } = {}) {
+  // Consumer 1: per-turn telemetry. recordTurnOutcome is already best-effort,
+  // but we wrap it again so an injected/overridden recorder that throws is
+  // still contained here.
+  try {
+    telemetryRecorder(outcome, { cwd });
+  } catch {
+    // swallow — a telemetry failure must never disturb the turn lifecycle.
+  }
+
+  // EXTENSION POINT: add additional independent consumers below, each in its own
+  // try/catch reading from `outcome`. Do NOT let a new consumer share a catch
+  // with telemetry — isolation per consumer is the contract.
+}
 
 /**
  * Remove the auto-pane marker so a future run of the same job/log can reopen a
@@ -168,6 +227,9 @@ function readStoredJobOrNull(workspaceRoot, jobId) {
 }
 
 export async function runTrackedJob(job, runner, options = {}) {
+  // Epoch-ms bookends for telemetry duration. Kept separate from the ISO
+  // timestamps the stored job record uses so the outcome carries raw numbers.
+  const startedAtMs = Date.now();
   const runningRecord = {
     ...job,
     status: "running",
@@ -182,6 +244,31 @@ export async function runTrackedJob(job, runner, options = {}) {
   // Auto-open a tmux pane tailing the live log (guarded so only one pane opens
   // per job). Best-effort: openWatchPane never throws.
   openWatchPane(runningRecord.logFile);
+
+  // Build the canonical per-turn outcome once, fan it out through the shared
+  // seam. restartCount is hardcoded to 0 because no companion-side restart
+  // counter exists in v1 (the broker owns restarts and does not surface a count
+  // back here); a later feature can populate it without changing the schema.
+  const buildOutcome = (exitReason, threadId) => {
+    const endedAtMs = Date.now();
+    return {
+      startedAt: startedAtMs,
+      endedAt: endedAtMs,
+      durationMs: endedAtMs - startedAtMs,
+      exitReason,
+      threadId: threadId ?? null,
+      kind: job.kind ?? null,
+      title: job.title ?? null,
+      restartCount: 0
+      // usage intentionally omitted: the app-server does not surface token/usage
+      // counts to the companion, so there is nothing honest to record here.
+    };
+  };
+  const emitOutcome = (outcome) =>
+    emitTurnOutcome(outcome, {
+      cwd: job.workspaceRoot,
+      telemetryRecorder: options.telemetryRecorder
+    });
 
   try {
     const execution = await runner();
@@ -210,6 +297,19 @@ export async function runTrackedJob(job, runner, options = {}) {
     });
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     clearPaneMarker(runningRecord.logFile);
+    // The turn RESOLVED, but resolution is not the same as clean completion.
+    // buildResultStatus returns 0 only for finalTurn.status === "completed" and 1
+    // for ANY other resolved settlement, so `exitStatus !== 0` captures every
+    // non-clean resolve — not just one cause. In practice this is dominated by a
+    // broker self-heal (the broker emits `turn/completed status:"interrupted"`,
+    // which resolves rather than rejects), but other non-"completed" statuses
+    // (e.g. an aborted turn) land here too. None of these reach the catch block
+    // below. We split by exitStatus: a clean 0 is "completed"; any non-zero
+    // resolve is "interrupted" — its own VISIBLE bucket (named for the dominant
+    // cause) so /codex:stats surfaces this churn instead of hiding it inside
+    // "completed".
+    const settledReason = execution.exitStatus === 0 ? "completed" : "interrupted";
+    emitOutcome(buildOutcome(settledReason, execution.threadId));
     return execution;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -233,6 +333,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       completedAt
     });
     clearPaneMarker(runningRecord.logFile);
+    emitOutcome(buildOutcome(classifyFailureReason(error), existing.threadId ?? job.threadId));
     throw error;
   }
 }

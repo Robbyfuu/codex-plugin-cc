@@ -379,6 +379,89 @@ export function renderStatusReport(report) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+function formatDurationMs(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0s";
+  }
+  if (value < 1000) {
+    return `${value}ms`;
+  }
+  const totalSeconds = value / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds - minutes * 60);
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatPercent(fraction) {
+  const value = Number(fraction);
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+export function renderStatsReport(report) {
+  const total = Number(report?.total) || 0;
+  const lines = ["# Codex Stats", "", `Total turns: ${total}`, ""];
+
+  if (total === 0) {
+    lines.push("No turns recorded yet.");
+    if (report?.recommendation) {
+      lines.push("", `Recommendation: ${report.recommendation}`);
+    }
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  lines.push("By exit reason:");
+  const countByReason = report?.countByReason ?? {};
+  // Stable, intuitive ordering: known reasons first, then any extras.
+  const reasonOrder = ["completed", "idle-stall", "hard-stop", "interrupted", "cancelled", "error"];
+  const seen = new Set();
+  const orderedReasons = [
+    ...reasonOrder.filter((reason) => reason in countByReason),
+    ...Object.keys(countByReason).filter((reason) => !reasonOrder.includes(reason))
+  ];
+  for (const reason of orderedReasons) {
+    if (seen.has(reason)) {
+      continue;
+    }
+    seen.add(reason);
+    const count = countByReason[reason] ?? 0;
+    const pct = formatPercent(total > 0 ? count / total : 0);
+    lines.push(`- ${reason}: ${count} (${pct})`);
+  }
+  lines.push("");
+
+  lines.push("Duration:");
+  lines.push(`- p50: ${formatDurationMs(report?.durationP50)}`);
+  lines.push(`- p95: ${formatDurationMs(report?.durationP95)}`);
+  lines.push(`- max: ${formatDurationMs(report?.durationMax)}`);
+  lines.push("");
+
+  lines.push(`Stall rate: ${formatPercent(report?.stallRate)}`);
+  lines.push(`Restart rate: ${formatPercent(report?.restartRate)}`);
+  lines.push("");
+
+  // `interrupted` covers any turn that RESOLVED without a clean `completed`
+  // status (buildResultStatus maps every non-"completed" final status to a
+  // non-zero exit). The dominant cause is a broker self-heal (restart mid-turn),
+  // but it is not the sole one, so the legend names it as the typical case
+  // without over-attributing. It is its own bucket (NOT folded into `error`) and
+  // signals instability rather than a timeout-tuning problem.
+  lines.push("Note: `interrupted` — turn settled without a clean completion (typically a broker self-heal, possibly an aborted turn); signals instability, not a timeout-tuning issue.");
+  lines.push("");
+
+  if (report?.recommendation) {
+    lines.push(`Recommendation: ${report.recommendation}`);
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
 export function renderJobStatusReport(job) {
   const lines = ["# Codex Job Status", ""];
   pushJobDetails(lines, job, {
