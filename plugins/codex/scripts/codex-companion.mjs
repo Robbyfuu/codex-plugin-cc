@@ -204,7 +204,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
   }
   if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex:setup --enable-review-gate` to require a fresh review before stop.");
+    nextSteps.push("Optional: run `/codex-plus:setup --enable-review-gate` to require a fresh review before stop.");
   }
 
   return {
@@ -260,7 +260,7 @@ function buildAdversarialReviewPrompt(context, focusText) {
 function ensureCodexAvailable(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex-plus:setup`.");
   }
 }
 
@@ -279,13 +279,13 @@ function buildNativeReviewTarget(target) {
 function validateNativeReviewRequest(target, focusText) {
   if (focusText.trim()) {
     throw new Error(
-      `\`/codex:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex:adversarial-review ${focusText.trim()}\` for focused review instructions.`
+      `\`/codex-plus:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex-plus:adversarial-review ${focusText.trim()}\` for focused review instructions.`
     );
   }
 
   const nativeTarget = buildNativeReviewTarget(target);
   if (!nativeTarget) {
-    throw new Error("This `/codex:review` target is not supported by the built-in reviewer. Retry with `/codex:adversarial-review` for custom targeting.");
+    throw new Error("This `/codex-plus:review` target is not supported by the built-in reviewer. Retry with `/codex-plus:adversarial-review` for custom targeting.");
   }
 
   return nativeTarget;
@@ -348,7 +348,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    throw new Error(`Task ${activeTask.id} is still running. Use /codex-plus:status before continuing it.`);
   }
 
   const trackedTask = findLatestResumableTaskJob(visibleJobs);
@@ -562,7 +562,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
+  return `${payload.title} started in the background as ${payload.jobId}. Check /codex-plus:status ${payload.jobId} for progress.\n`;
 }
 
 function getJobKindLabel(kind, jobClass) {
@@ -989,14 +989,17 @@ async function recoverBrokerForCancel(workspaceRoot, options = {}) {
   return { attempted: true, recovered: result.recovered, owned: result.owned };
 }
 
-async function handleCancelWithoutJob(cwd, options) {
+async function handleCancelWithoutJob(cwd, options, noJobMessage) {
   // No tracked job is active, but a wedged broker can still be holding the
   // single-flight slot. With no threadId the broker only restarts when its slot
   // is idle/unowned, so this can never disturb another job's live turn.
   const workspaceRoot = resolveCommandWorkspace(options);
   const broker = await recoverBrokerForCancel(workspaceRoot);
   if (!broker.attempted) {
-    throw new Error("No active Codex jobs to cancel.");
+    // Preserve the session-aware wording from resolveCancelableJob so a user
+    // who only owns other-session jobs learns the refusal is scoped to their
+    // Claude session, not a global "nothing to cancel".
+    throw new Error(noJobMessage || "No active Codex jobs to cancel.");
   }
   const payload = {
     jobId: null,
@@ -1015,7 +1018,7 @@ function resolveWatchTargetJob(workspaceRoot, reference) {
   if (reference) {
     const exact = jobs.find((job) => job.id === reference || job.id.startsWith(reference));
     if (!exact) {
-      throw new Error(`No job found for "${reference}". Run /codex:status to list jobs.`);
+      throw new Error(`No job found for "${reference}". Run /codex-plus:status to list jobs.`);
     }
     return exact;
   }
@@ -1084,7 +1087,7 @@ async function handleCancel(argv) {
     // "multiple jobs active" errors must still surface so the user disambiguates.
     const message = error instanceof Error ? error.message : String(error);
     if (!reference && /no active codex jobs to cancel/i.test(message)) {
-      await handleCancelWithoutJob(cwd, options);
+      await handleCancelWithoutJob(cwd, options, message);
       return;
     }
     throw error;
@@ -1112,12 +1115,12 @@ async function handleCancel(argv) {
   // different job owns the active slot. Only meaningful for a job that was
   // actually running a turn (has a threadId); otherwise it owns no broker slot.
   //
-  // KNOWN LIMITATION (detached review): for a DETACHED `/codex:review` this
+  // KNOWN LIMITATION (detached review): for a DETACHED `/codex-plus:review` this
   // threadId is the reviewThreadId (captureTurn promotes it to state.threadId),
   // while the broker keys its slot on the source thread until the review/start
   // response resolves and adds both ids. So a detached cancel recovers in steady
   // state but can no-op if it lands inside that brief review/start window. The
-  // inline `/codex:review` path is unaffected. See the matching note at
+  // inline `/codex-plus:review` path is unaffected. See the matching note at
   // broker/recover in app-server-broker.mjs.
   const brokerRecovery =
     threadId && job.status === "running"
