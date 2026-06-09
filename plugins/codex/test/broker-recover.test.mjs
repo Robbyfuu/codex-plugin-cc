@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { sendBrokerRecover } from "../scripts/lib/broker-lifecycle.mjs";
+import * as brokerLifecycle from "../scripts/lib/broker-lifecycle.mjs";
+import { isBrokerEndpointReady, sendBrokerRecover } from "../scripts/lib/broker-lifecycle.mjs";
+
+test("broker-lifecycle exports isBrokerEndpointReady for doctor reuse", () => {
+  assert.equal(typeof brokerLifecycle.isBrokerEndpointReady, "function");
+  assert.equal(typeof isBrokerEndpointReady, "function");
+});
 
 function makeSocketPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-broker-recover-"));

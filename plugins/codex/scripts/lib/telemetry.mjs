@@ -25,8 +25,9 @@ import {
  */
 
 // Roll the active log to `.jsonl.1` (single generation, overwritten) once it
-// crosses this size, so an always-on append cannot grow without bound.
-const MAX_TELEMETRY_BYTES = 5 * 1024 * 1024;
+// crosses this size, so an always-on append cannot grow without bound. Exported
+// so doctor's state-dir walk uses the SAME cap rather than a drifting copy.
+export const MAX_TELEMETRY_BYTES = 5 * 1024 * 1024;
 
 // A run needs at least this many samples before percentile-based tuning advice
 // is statistically meaningful; below it we say so honestly.

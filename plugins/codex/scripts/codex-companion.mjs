@@ -24,6 +24,7 @@ import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadBrokerSession, sendBrokerRecover } from "./lib/broker-lifecycle.mjs";
+import { buildDoctorReport, planCleanup, executeCleanup } from "./lib/doctor.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
 import { emitTurnNotification } from "./lib/notify.mjs";
@@ -65,7 +66,8 @@ import {
   renderSetupReport,
   renderStatsReport,
   renderStatusReport,
-  renderTaskResult
+  renderTaskResult,
+  renderDoctorReport
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -86,6 +88,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs stats [--json]",
+      "  node scripts/codex-companion.mjs doctor [--fix] [--clean] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
       "  node scripts/codex-companion.mjs watch [job-id] [--json]"
@@ -885,6 +888,30 @@ function handleStats(argv) {
   outputResult(options.json ? report : renderStatsReport(report), options.json);
 }
 
+async function handleDoctor(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json", "fix", "clean"]
+  });
+
+  // The state dir is keyed by workspace root (resolveStateDir resolves through
+  // resolveWorkspaceRoot), so doctor must diagnose the workspace, not the raw
+  // cwd, to match where jobs/telemetry/broker.json actually live.
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const fix = Boolean(options.fix);
+  const clean = Boolean(options.clean);
+
+  const report = await buildDoctorReport(workspaceRoot, { env: process.env });
+
+  if (fix || clean) {
+    const plan = planCleanup(report, { fix, clean });
+    report.plannedActions = { safe: plan.safe, gated: plan.gated };
+    report.actionsTaken = executeCleanup(plan, report);
+  }
+
+  outputResult(options.json ? report : renderDoctorReport(report), options.json);
+}
+
 function handleResult(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
@@ -1204,6 +1231,9 @@ async function main() {
       break;
     case "stats":
       handleStats(argv);
+      break;
+    case "doctor":
+      await handleDoctor(argv);
       break;
     case "result":
       handleResult(argv);
