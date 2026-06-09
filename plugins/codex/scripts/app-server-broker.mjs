@@ -243,7 +243,7 @@ async function main() {
       onUnrecoverable: () => {
         // The child swap failed; this broker can no longer serve requests on its
         // broken client. Latch unhealthy, then exit so broker-lifecycle respawns
-        // a fresh broker + child on the next /codex:* call. The waiting client
+        // a fresh broker + child on the next /codex-plus:* call. The waiting client
         // was already notified by notifyWaiter above, so nobody hangs.
         unhealthy = true;
         process.exit(1);
@@ -326,13 +326,13 @@ async function main() {
         // job's cancel never kills another job's in-flight turn. A recover with
         // no threadId means "recover only if idle/unowned".
         //
-        // KNOWN LIMITATION (detached review): a DETACHED `/codex:review` job
+        // KNOWN LIMITATION (detached review): a DETACHED `/codex-plus:review` job
         // persists threadId = reviewThreadId, while the broker keys
         // activeThreadIds on the source thread until the `review/start` response
         // resolves. buildStreamThreadIds then adds BOTH source + reviewThreadId
         // to activeThreadIds, so a detached cancel matches in steady state; only
         // a cancel landing in the brief review/start round-trip window can
-        // no-op. The native inline `/codex:review` path is unaffected (it cancels
+        // no-op. The native inline `/codex-plus:review` path is unaffected (it cancels
         // on the source thread). Documented rather than fixed because closing the
         // window would require persisting/forwarding sourceThreadId end-to-end.
         if (message.id !== undefined && message.method === "broker/recover") {

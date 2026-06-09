@@ -64,7 +64,7 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
-  assert.match(source, /uses the same review target selection as `\/codex:review`/i);
+  assert.match(source, /uses the same review target selection as `\/codex-plus:review`/i);
   assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
   assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
   assert.match(source, /can still take extra focus text after the flags/i);
@@ -75,12 +75,18 @@ test("continue is not exposed as a user-facing command", () => {
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "doctor.md",
     "rescue.md",
     "result.md",
     "review.md",
     "setup.md",
-    "status.md"
+    "stats.md",
+    "status.md",
+    "watch.md"
   ]);
+  // The guard that matters for this test: `continue` is never exposed as a
+  // user-facing command (its semantics live inside `/codex-plus:rescue`).
+  assert.equal(commandFiles.includes("continue.md"), false);
 });
 
 test("rescue command absorbs continue semantics", () => {
@@ -152,20 +158,20 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
-  assert.match(readme, /`codex:codex-rescue` subagent/i);
+  assert.match(readme, /`codex-plus:codex-rescue` subagent/i);
   assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
   assert.match(readme, /--model gpt-5\.4-mini --effort medium/i);
   assert.match(readme, /`spark`, the plugin maps that to `gpt-5\.3-codex-spark`/i);
   assert.match(readme, /continue a previous Codex task/i);
-  assert.match(readme, /### `\/codex:setup`/);
-  assert.match(readme, /### `\/codex:review`/);
-  assert.match(readme, /### `\/codex:adversarial-review`/);
-  assert.match(readme, /uses the same review target selection as `\/codex:review`/i);
+  assert.match(readme, /### `\/codex-plus:setup`/);
+  assert.match(readme, /### `\/codex-plus:review`/);
+  assert.match(readme, /### `\/codex-plus:adversarial-review`/);
+  assert.match(readme, /uses the same review target selection as `\/codex-plus:review`/i);
   assert.match(readme, /--base main challenge whether this was the right caching and retry design/);
-  assert.match(readme, /### `\/codex:rescue`/);
-  assert.match(readme, /### `\/codex:status`/);
-  assert.match(readme, /### `\/codex:result`/);
-  assert.match(readme, /### `\/codex:cancel`/);
+  assert.match(readme, /### `\/codex-plus:rescue`/);
+  assert.match(readme, /### `\/codex-plus:status`/);
+  assert.match(readme, /### `\/codex-plus:result`/);
+  assert.match(readme, /### `\/codex-plus:cancel`/);
 });
 
 test("result and cancel commands are exposed as deterministic runtime entrypoints", () => {
@@ -214,6 +220,6 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(setup, /codex-companion\.mjs" setup --json \$ARGUMENTS/);
   assert.match(readme, /!codex login/);
   assert.match(readme, /offer to install Codex for you/i);
-  assert.match(readme, /\/codex:setup --enable-review-gate/);
-  assert.match(readme, /\/codex:setup --disable-review-gate/);
+  assert.match(readme, /\/codex-plus:setup --enable-review-gate/);
+  assert.match(readme, /\/codex-plus:setup --disable-review-gate/);
 });

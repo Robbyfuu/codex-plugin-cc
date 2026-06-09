@@ -105,7 +105,7 @@ export function createNotificationRouter(boundGeneration, ctx) {
  *   2. reset the slot and stop the idle guard (no recovery loop),
  *   3. invoke `onUnrecoverable()` so the broker fails fast (process.exit), which
  *      lets broker-lifecycle.ensureBrokerSession lazily respawn a FRESH broker +
- *      child on the next /codex:* call (its endpoint probe detects the dead
+ *      child on the next /codex-plus:* call (its endpoint probe detects the dead
  *      socket and spawns anew).
  *
  * Returns `{ recovered: true }` on success or `{ recovered: false, error }` on

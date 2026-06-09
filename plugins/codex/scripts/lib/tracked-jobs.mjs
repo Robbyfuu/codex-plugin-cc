@@ -328,7 +328,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     // (e.g. an aborted turn) land here too. None of these reach the catch block
     // below. We split by exitStatus: a clean 0 is "completed"; any non-zero
     // resolve is "interrupted" — its own VISIBLE bucket (named for the dominant
-    // cause) so /codex:stats surfaces this churn instead of hiding it inside
+    // cause) so /codex-plus:stats surfaces this churn instead of hiding it inside
     // "completed".
     const settledReason = execution.exitStatus === 0 ? "completed" : "interrupted";
     emitOutcome(buildOutcome(settledReason, execution.threadId));

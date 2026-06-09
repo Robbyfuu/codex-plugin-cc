@@ -105,7 +105,7 @@ export function openWatchPane(logFile, options = {}) {
 
   const existsSyncImpl = options.existsSyncImpl ?? fs.existsSync;
   const markerFile = resolvePaneMarkerFile(logFile);
-  // `force` is used by the manual /codex:watch command, which should always open
+  // `force` is used by the manual /codex-plus:watch command, which should always open
   // a fresh pane on demand even if an auto pane was opened earlier.
   if (!options.force && existsSyncImpl(markerFile)) {
     return { opened: false, reason: "already-open" };
