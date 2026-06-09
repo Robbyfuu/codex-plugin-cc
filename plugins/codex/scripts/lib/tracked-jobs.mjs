@@ -2,6 +2,7 @@ import fs from "node:fs";
 import process from "node:process";
 
 import { openWatchPane, resolvePaneMarkerFile } from "./live-view.mjs";
+import { emitTurnNotification } from "./notify.mjs";
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 import { recordTurnOutcome } from "./telemetry.mjs";
 import { CodexStallError } from "./watchdog.mjs";
@@ -42,15 +43,23 @@ function classifyFailureReason(error) {
 /**
  * Single fan-out point for a finished turn. Each consumer is invoked inside its
  * own try/catch so one consumer failing can never (a) throw into the turn
- * lifecycle, nor (b) starve the other consumers. Telemetry is the only consumer
- * in v1; this is the deliberate EXTENSION POINT — a later feature (e.g. a
- * metrics emitter or notifier) registers another independent, try/caught block
- * right here, reading from the same `outcome` object.
+ * lifecycle, nor (b) starve the other consumers. There are two consumers today —
+ * per-turn telemetry and the completion/stall notifier (F2) — each in its own
+ * try/catch. This stays the deliberate EXTENSION POINT: a later feature (e.g. a
+ * metrics emitter) registers another independent, try/caught block right here,
+ * reading from the same `outcome` object.
  *
  * @param {object} outcome canonical per-turn outcome (see runTrackedJob)
- * @param {{ cwd: string, telemetryRecorder?: typeof recordTurnOutcome }} context
+ * @param {{
+ *   cwd: string,
+ *   telemetryRecorder?: typeof recordTurnOutcome,
+ *   notifier?: typeof emitTurnNotification
+ * }} context
  */
-function emitTurnOutcome(outcome, { cwd, telemetryRecorder = recordTurnOutcome } = {}) {
+function emitTurnOutcome(
+  outcome,
+  { cwd, telemetryRecorder = recordTurnOutcome, notifier = emitTurnNotification } = {}
+) {
   // Consumer 1: per-turn telemetry. recordTurnOutcome is already best-effort,
   // but we wrap it again so an injected/overridden recorder that throws is
   // still contained here.
@@ -60,9 +69,21 @@ function emitTurnOutcome(outcome, { cwd, telemetryRecorder = recordTurnOutcome }
     // swallow — a telemetry failure must never disturb the turn lifecycle.
   }
 
+  // Consumer 2: completion/stall notification (F2). Independent of telemetry and
+  // wrapped in its OWN try/catch — it must never share telemetry's catch, so a
+  // notifier failure can neither disturb the turn lifecycle nor starve the
+  // telemetry consumer above. emitTurnNotification is itself fire-and-forget and
+  // never throws, but we contain it here as a second line of defense (and so an
+  // injected/overridden notifier that throws is still isolated).
+  try {
+    notifier(outcome);
+  } catch {
+    // swallow — a notification failure must never disturb the turn lifecycle.
+  }
+
   // EXTENSION POINT: add additional independent consumers below, each in its own
   // try/catch reading from `outcome`. Do NOT let a new consumer share a catch
-  // with telemetry — isolation per consumer is the contract.
+  // with another consumer — isolation per consumer is the contract.
 }
 
 /**
@@ -267,7 +288,8 @@ export async function runTrackedJob(job, runner, options = {}) {
   const emitOutcome = (outcome) =>
     emitTurnOutcome(outcome, {
       cwd: job.workspaceRoot,
-      telemetryRecorder: options.telemetryRecorder
+      telemetryRecorder: options.telemetryRecorder,
+      notifier: options.notifier
     });
 
   try {

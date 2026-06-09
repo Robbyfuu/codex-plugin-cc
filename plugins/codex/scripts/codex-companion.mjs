@@ -26,6 +26,7 @@ import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadBrokerSession, sendBrokerRecover } from "./lib/broker-lifecycle.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
+import { emitTurnNotification } from "./lib/notify.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
@@ -1123,29 +1124,41 @@ async function handleCancel(argv) {
   });
 
   // Cancellation happens outside runTrackedJob's lifecycle (the worker process is
-  // killed), so emit the `cancelled` telemetry outcome here directly. Best-effort
-  // and wrapped so a telemetry failure can never break a cancel. startedAt is
-  // derived from the stored job's ISO timestamp; if absent we fall back to the
-  // cancel time so durationMs is a non-negative number rather than NaN.
+  // killed), so the canonical `cancelled` outcome is built and fanned out here
+  // directly rather than through emitTurnOutcome. startedAt is derived from the
+  // stored job's ISO timestamp; if absent we fall back to the cancel time so
+  // durationMs is a non-negative number rather than NaN.
+  const cancelEndedAtMs = Date.parse(completedAt);
+  const cancelStartedAtMs =
+    Date.parse(existing.startedAt ?? job.startedAt ?? completedAt) || cancelEndedAtMs;
+  const cancelOutcome = {
+    startedAt: cancelStartedAtMs,
+    endedAt: cancelEndedAtMs,
+    durationMs: Math.max(0, cancelEndedAtMs - cancelStartedAtMs),
+    exitReason: "cancelled",
+    threadId: threadId ?? null,
+    kind: job.kind ?? null,
+    title: job.title ?? null,
+    restartCount: 0
+    // usage intentionally omitted (no token/usage data is surfaced).
+  };
+
+  // Consumer 1: telemetry. Each consumer below gets its OWN try/catch so a
+  // failure in one can neither break the cancel nor starve the other — the same
+  // consumer-isolation contract emitTurnOutcome enforces for the normal path.
   try {
-    const endedAtMs = Date.parse(completedAt);
-    const startedAtMs = Date.parse(existing.startedAt ?? job.startedAt ?? completedAt) || endedAtMs;
-    recordTurnOutcome(
-      {
-        startedAt: startedAtMs,
-        endedAt: endedAtMs,
-        durationMs: Math.max(0, endedAtMs - startedAtMs),
-        exitReason: "cancelled",
-        threadId: threadId ?? null,
-        kind: job.kind ?? null,
-        title: job.title ?? null,
-        restartCount: 0
-        // usage intentionally omitted (no token/usage data is surfaced).
-      },
-      { cwd: workspaceRoot }
-    );
+    recordTurnOutcome(cancelOutcome, { cwd: workspaceRoot });
   } catch {
     // swallow — telemetry must never disturb cancellation.
+  }
+
+  // Consumer 2: completion/stall notification, so a cancel notifies too. Own
+  // try/catch, fire-and-forget — emitTurnNotification never awaits and never
+  // throws, but we contain it here as a second line of defense.
+  try {
+    emitTurnNotification(cancelOutcome);
+  } catch {
+    // swallow — a notification failure must never disturb cancellation.
   }
 
   const payload = {

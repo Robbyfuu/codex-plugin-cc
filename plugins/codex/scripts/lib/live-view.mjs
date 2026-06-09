@@ -15,11 +15,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function isFalsey(value) {
+// Exported as the single source of truth for boolean env parsing; notify.mjs
+// reuses these so the master opt-out knob behaves identically to the watch-pane
+// knob (no duplicated truthy/falsey tables drifting apart).
+export function isFalsey(value) {
   return ["0", "false", "off", "no"].includes(String(value).trim().toLowerCase());
 }
 
-function isTruthy(value) {
+export function isTruthy(value) {
   return ["1", "true", "on", "yes"].includes(String(value).trim().toLowerCase());
 }
 

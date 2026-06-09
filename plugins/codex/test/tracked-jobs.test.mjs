@@ -196,3 +196,70 @@ test("runTrackedJob telemetry wrapper swallows a recorder throw on the failure p
     );
   });
 });
+
+test("runTrackedJob invokes the notification consumer from emitTurnOutcome", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const recorder = captureRecorder();
+    const notified = [];
+    const execution = { exitStatus: 0, threadId: "thread-1", turnId: "turn-1", payload: {}, rendered: "ok", summary: "s" };
+
+    await runTrackedJob(makeJob(workspaceRoot), async () => execution, {
+      telemetryRecorder: recorder.recordTurnOutcome,
+      notifier: (outcome) => notified.push(outcome)
+    });
+
+    assert.equal(notified.length, 1, "the notification consumer must be invoked exactly once");
+    // It reads the SAME canonical outcome the telemetry consumer received.
+    assert.equal(notified[0].exitReason, "completed");
+    assert.equal(notified[0].title, "Codex Task");
+    assert.deepEqual(notified[0], recorder.outcomes[0], "both consumers see the identical outcome object");
+  });
+});
+
+test("runTrackedJob: a throwing notifier does NOT perturb the turn result", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const execution = { exitStatus: 0, threadId: "t", turnId: "u", payload: {}, rendered: "ok", summary: "s" };
+    const result = await runTrackedJob(makeJob(workspaceRoot), async () => execution, {
+      notifier() {
+        throw new Error("notifier exploded");
+      }
+    });
+    assert.equal(result, execution, "the turn result is unaffected by a notifier failure");
+  });
+});
+
+test("runTrackedJob: a throwing notifier does NOT perturb telemetry (consumer isolation)", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const recorder = captureRecorder();
+    const execution = { exitStatus: 0, threadId: "t", turnId: "u", payload: {}, rendered: "ok", summary: "s" };
+
+    await runTrackedJob(makeJob(workspaceRoot), async () => execution, {
+      telemetryRecorder: recorder.recordTurnOutcome,
+      notifier() {
+        throw new Error("notifier exploded");
+      }
+    });
+
+    // Telemetry must still record despite the notifier throwing: each consumer is
+    // isolated in its own try/catch, so one failing cannot starve the other.
+    assert.equal(recorder.outcomes.length, 1, "telemetry must record even when the notifier throws");
+    assert.equal(recorder.outcomes[0].exitReason, "completed");
+  });
+});
+
+test("runTrackedJob: a throwing telemetry recorder does NOT starve the notifier (reverse isolation)", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const notified = [];
+    const execution = { exitStatus: 0, threadId: "t", turnId: "u", payload: {}, rendered: "ok", summary: "s" };
+
+    const result = await runTrackedJob(makeJob(workspaceRoot), async () => execution, {
+      telemetryRecorder() {
+        throw new Error("telemetry exploded");
+      },
+      notifier: (outcome) => notified.push(outcome)
+    });
+
+    assert.equal(result, execution);
+    assert.equal(notified.length, 1, "the notifier must still fire even when telemetry throws first");
+  });
+});
