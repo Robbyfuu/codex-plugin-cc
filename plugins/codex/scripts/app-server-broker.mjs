@@ -9,6 +9,7 @@ import { parseArgs } from "./lib/args.mjs";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs";
 import { parseBrokerEndpoint } from "./lib/broker-endpoint.mjs";
 import { createNotificationRouter, performBrokerRecovery } from "./lib/broker-routing.mjs";
+import { recordBrokerEvent } from "./lib/broker-telemetry.mjs";
 import { createBrokerIdleGuard, resolveTimeouts } from "./lib/watchdog.mjs";
 
 const STREAMING_METHODS = new Set(["turn/start", "review/start", "thread/compact/start"]);
@@ -69,7 +70,22 @@ async function main() {
   writePidFile(pidFile);
 
   const { idleMs } = resolveTimeouts(process.env);
+
+  // Best-effort broker event telemetry: append broker lifecycle events to the
+  // sibling broker-telemetry.jsonl so /codex-plus:stats can report REAL restart
+  // counts instead of inferring them from the interrupted turn bucket. Never
+  // throws into the broker (recordBrokerEvent is itself swallow-on-failure, but
+  // we also wrap here so a resolver hiccup can never disturb a child swap).
+  const recordEvent = (event) => {
+    try {
+      recordBrokerEvent(event, { cwd });
+    } catch {
+      // swallow — broker telemetry is observational, never load-bearing.
+    }
+  };
+
   let appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+  recordEvent({ event: "child-spawned", generation: 0 });
   // Monotonic generation, bumped on every child (re)connect. Each child's
   // notification handler closes over the generation it was created with, so a
   // late notification from an OLD child (e.g. a stale turn/completed arriving
@@ -206,6 +222,7 @@ async function main() {
         await oldClient.close().catch(() => {});
         appClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
         appClient.setNotificationHandler(makeRouteNotification(generation));
+        recordEvent({ event: "child-spawned", generation });
       },
       notifyWaiter: () => {
         if (!waiting) {
@@ -247,7 +264,11 @@ async function main() {
         // was already notified by notifyWaiter above, so nobody hangs.
         unhealthy = true;
         process.exit(1);
-      }
+      },
+      // Stamp each recovery event with the live generation so stats can correlate
+      // a restart with the child it produced. broker-routing emits the bare
+      // {event} and never throws; we enrich it here without touching that purity.
+      recordEvent: (entry) => recordEvent({ ...entry, generation })
     });
 
     recovering = false;

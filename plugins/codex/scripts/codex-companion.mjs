@@ -38,6 +38,9 @@ import {
   writeJobFile
 } from "./lib/state.mjs";
 import { aggregateTelemetry, readTelemetry, recordTurnOutcome } from "./lib/telemetry.mjs";
+import { readBrokerTelemetry } from "./lib/broker-telemetry.mjs";
+import { prepareTaskResume } from "./lib/task-resume.mjs";
+import { buildHistoryReport, DEFAULT_HISTORY_LIMIT } from "./lib/history.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -63,6 +66,7 @@ import {
   renderReviewResult,
   renderStoredJobResult,
   renderCancelReport,
+  renderHistoryReport,
   renderJobStatusReport,
   renderSetupReport,
   renderStatsReport,
@@ -86,9 +90,10 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-id <job-id>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs stats [--json]",
+      "  node scripts/codex-companion.mjs history [--limit <n>] [--json]",
       "  node scripts/codex-companion.mjs doctor [--fix] [--clean] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
@@ -473,11 +478,13 @@ async function executeTaskRun(request) {
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: request.resumeLast || Boolean(request.resumeThreadId)
   });
 
-  let resumeThreadId = null;
-  if (request.resumeLast) {
+  // A direct resumeThreadId (from `task --resume-id <job-id>`) takes precedence:
+  // the caller already resolved the exact surviving thread, so we never search.
+  let resumeThreadId = request.resumeThreadId ?? null;
+  if (!resumeThreadId && request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -573,16 +580,17 @@ function getJobKindLabel(kind, jobClass) {
   return jobClass === "review" ? "review" : "rescue";
 }
 
-function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
+function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false, id, resumedFrom }) {
   return createJobRecord({
-    id: generateJobId(prefix),
+    id: id ?? generateJobId(prefix),
     kind,
     kindLabel: getJobKindLabel(kind, jobClass),
     title,
     workspaceRoot,
     jobClass,
     summary,
-    write
+    write,
+    ...(resumedFrom ? { resumedFrom } : {})
   });
 }
 
@@ -610,7 +618,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, resumeThreadId, jobId }) {
   return {
     cwd,
     model,
@@ -618,6 +626,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
+    ...(resumeThreadId ? { resumeThreadId } : {}),
     jobId
   };
 }
@@ -743,7 +752,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-id"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -754,6 +763,15 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
+
+  // `--resume-id <job-id>` is the manual resume path for a task killed by the
+  // hard-duration ceiling (or an idle stall). It resolves the surviving thread
+  // from the stored job and launches a NEW tracked job linked via resumedFrom.
+  if (options["resume-id"]) {
+    await handleTaskResume(argv, { options, positionals, cwd, workspaceRoot, model, effort });
+    return;
+  }
+
   const prompt = await readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -798,6 +816,74 @@ async function handleTask(argv) {
         write,
         resumeLast,
         jobId: job.id,
+        onProgress: progress
+      }),
+    { json: options.json }
+  );
+}
+
+async function handleTaskResume(argv, { options, positionals, cwd, workspaceRoot, model, effort }) {
+  ensureCodexAvailable(cwd);
+
+  // An optional continuation prompt may follow the flags (positionals) or come
+  // from a prompt file / stdin; default to "Continue where you left off." inside
+  // prepareTaskResume when none is supplied.
+  const overridePrompt = (await readTaskPrompt(cwd, options, positionals)).trim();
+  const write = options.write === undefined ? undefined : Boolean(options.write);
+
+  const plan = prepareTaskResume(workspaceRoot, options["resume-id"], {
+    prompt: overridePrompt || undefined,
+    model,
+    effort,
+    write
+  });
+
+  // Colocate the resumed job under the SOURCE's workspace (not the current
+  // invocation's), so the chain (source + resumed) lives in one state dir and the
+  // resumed job appears next to its source in /status, /history, /stats.
+  const resumeWorkspaceRoot = plan.workspaceRoot;
+  // The source's original cwd: the worker (background) resolves its workspace from
+  // this, landing on the same state dir; the foreground run also uses it.
+  const resumeCwd = plan.request.cwd;
+
+  // Materialize a full tracked-job record (createdAt/sessionId) from the plan,
+  // preserving the resumedFrom link so status/result show the chain.
+  const job = createCompanionJob({
+    id: plan.job.id,
+    prefix: "task",
+    kind: "task",
+    title: plan.job.title,
+    workspaceRoot: resumeWorkspaceRoot,
+    jobClass: "task",
+    summary: plan.job.summary,
+    write: plan.job.write,
+    resumedFrom: plan.job.resumedFrom
+  });
+
+  const request = buildTaskRequest({
+    cwd: resumeCwd,
+    model: plan.request.model,
+    effort: plan.request.effort,
+    prompt: plan.request.prompt,
+    write: plan.request.write,
+    resumeLast: false,
+    resumeThreadId: plan.request.resumeThreadId,
+    jobId: job.id
+  });
+
+  if (options.background) {
+    // Spawn the detached worker against the SOURCE cwd so it resolves the same
+    // workspace state dir the job record was written to.
+    const { payload } = enqueueBackgroundTask(resumeCwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch({ ...payload, title: job.title }), options.json);
+    return;
+  }
+
+  await runForegroundCommand(
+    job,
+    (progress) =>
+      executeTaskRun({
+        ...request,
         onProgress: progress
       }),
     { json: options.json }
@@ -890,8 +976,23 @@ function handleStats(argv) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const records = readTelemetry({ cwd: workspaceRoot });
-  const report = aggregateTelemetry(records, { env: process.env });
+  const brokerEvents = readBrokerTelemetry({ cwd: workspaceRoot });
+  const report = aggregateTelemetry(records, { env: process.env, brokerEvents });
   outputResult(options.json ? report : renderStatsReport(report), options.json);
+}
+
+function handleHistory(argv) {
+  const { options } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "limit"],
+    booleanOptions: ["json"]
+  });
+
+  const workspaceRoot = resolveCommandWorkspace(options);
+  const limit = options.limit == null ? DEFAULT_HISTORY_LIMIT : Number(options.limit);
+  // Turns ONLY (no broker events) — history is a focused per-turn log.
+  const records = readTelemetry({ cwd: workspaceRoot });
+  const report = buildHistoryReport(records, { limit });
+  outputResult(options.json ? report : renderHistoryReport(report), options.json);
 }
 
 async function handleDoctor(argv) {
@@ -1240,6 +1341,9 @@ async function main() {
       break;
     case "stats":
       handleStats(argv);
+      break;
+    case "history":
+      handleHistory(argv);
       break;
     case "doctor":
       await handleDoctor(argv);

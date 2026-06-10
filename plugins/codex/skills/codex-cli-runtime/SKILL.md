@@ -30,6 +30,7 @@ Command selection:
 - If the forwarded request includes `--effort`, pass it through to `task`.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
+- If the forwarded request includes `--resume-id <job-id>`, pass it through to `task` unchanged (`task --resume-id <job-id>`). Do not translate it to `--resume-last`. This is the manual recovery path for a task killed by the idle/hard-duration ceiling: it resumes that exact surviving Codex thread on a fresh budget.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
 - `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.

@@ -593,7 +593,9 @@ export async function captureTurn(client, threadId, startRequest, options = {}) 
     onStall() {
       const error = new CodexStallError(
         `Codex turn stalled: no activity for ${timeouts.idleMs}ms; ` +
-          `raise ${IDLE_TIMEOUT_ENV} to allow longer idle gaps.`,
+          `raise ${IDLE_TIMEOUT_ENV} to allow longer idle gaps.\n` +
+          `The thread survives server-side — resume it with ` +
+          `\`/codex-plus:rescue --resume-id <job-id>\` (find the job id with \`/codex-plus:status\`).`,
         { idleMs: timeouts.idleMs, reason: "idle" }
       );
       emitProgress(state.onProgress, error.message, "failed");
@@ -603,7 +605,9 @@ export async function captureTurn(client, threadId, startRequest, options = {}) 
     onHardStop() {
       const error = new CodexStallError(
         `Codex turn exceeded the maximum duration of ${timeouts.maxTurnMs}ms ` +
-          `(${MAX_TURN_ENV}=${timeouts.maxTurnMs}ms); raise ${MAX_TURN_ENV} to allow longer turns.`,
+          `(${MAX_TURN_ENV}=${timeouts.maxTurnMs}ms); raise ${MAX_TURN_ENV} to allow longer turns.\n` +
+          `The thread survives server-side — resume it with ` +
+          `\`/codex-plus:rescue --resume-id <job-id>\` (find the job id with \`/codex-plus:status\`).`,
         { idleMs: timeouts.idleMs, reason: "max-duration" }
       );
       emitProgress(state.onProgress, error.message, "failed");

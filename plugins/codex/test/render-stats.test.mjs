@@ -69,6 +69,42 @@ test("renderStatsReport lists the interrupted bucket and an instability legend (
   assert.doesNotMatch(output, /counted under `?error`?/i);
 });
 
+test("renderStatsReport shows a Broker section with real restart counts when broker data exists", () => {
+  const output = renderStatsReport(
+    sampleReport({
+      total: 10,
+      hasBrokerData: true,
+      brokerRestarts: 3,
+      brokerRecoveryFailures: 1,
+      restartRate: 0.3,
+      restartRateSource: "broker"
+    })
+  );
+  assert.match(output, /Broker/);
+  assert.match(output, /restarts.*:\s*3/i);
+  assert.match(output, /recovery failures:\s*1/i);
+  // The restart-rate label must be honest about its source.
+  assert.match(output, /Restart rate:\s*30(\.0)?%/);
+  assert.match(output, /broker/i);
+});
+
+test("renderStatsReport omits the Broker section and labels restart rate as inferred when no broker data", () => {
+  const output = renderStatsReport(
+    sampleReport({
+      total: 10,
+      hasBrokerData: false,
+      brokerRestarts: 0,
+      brokerRecoveryFailures: 0,
+      restartRate: 0.2,
+      restartRateSource: "interrupted"
+    })
+  );
+  assert.doesNotMatch(output, /^# Broker|Broker section|Broker restarts/m);
+  // Honest fallback label: the rate is inferred from the interrupted bucket.
+  assert.match(output, /Restart rate:\s*20(\.0)?%/);
+  assert.match(output, /inferred|interrupted/i);
+});
+
 test("renderStatsReport surfaces the recommendation line verbatim", () => {
   const recommendation = "Raise CODEX_COMPANION_MAX_TURN_MS to give long turns more room.";
   const output = renderStatsReport(sampleReport({ recommendation }));

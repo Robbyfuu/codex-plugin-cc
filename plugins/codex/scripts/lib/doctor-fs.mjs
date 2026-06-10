@@ -90,7 +90,9 @@ function isAlwaysStaleArtifact(fileName) {
  *   fsImpl?: typeof fs,
  *   listJobsImpl?: typeof listJobs,
  *   resolveStateDirImpl?: typeof resolveStateDir,
- *   resolveJobsDirImpl?: typeof resolveJobsDir
+ *   resolveJobsDirImpl?: typeof resolveJobsDir,
+ *   telemetryFile?: string,
+ *   brokerTelemetryFile?: string
  * }} [options]
  */
 export function walkStateDir(cwd, options = {}) {
@@ -105,22 +107,34 @@ export function walkStateDir(cwd, options = {}) {
   const stateDir = resolveStateDirImpl(cwd);
   const jobsDir = resolveJobsDirImpl(cwd);
   const telemetryFile = options.telemetryFile ?? path.join(stateDir, "telemetry.jsonl");
+  const brokerTelemetryFile = options.brokerTelemetryFile ?? path.join(stateDir, "broker-telemetry.jsonl");
 
   const result = {
     totalBytes: 0,
     staleLogs: [],
     orphanPaneMarkers: [],
     telemetryBytes: 0,
-    telemetryOverCap: false
+    telemetryOverCap: false,
+    brokerTelemetryBytes: 0,
+    brokerTelemetryOverCap: false
   };
 
   result.totalBytes = directorySize(fsImpl, stateDir);
 
-  // Telemetry size + over-cap.
+  // Telemetry size + over-cap (both the per-turn file and the broker event log;
+  // they share the same byte cap and both roll under --clean).
   try {
     if (fsImpl.existsSync(telemetryFile)) {
       result.telemetryBytes = fsImpl.statSync(telemetryFile).size;
       result.telemetryOverCap = result.telemetryBytes > MAX_TELEMETRY_BYTES;
+    }
+  } catch {
+    // best-effort
+  }
+  try {
+    if (fsImpl.existsSync(brokerTelemetryFile)) {
+      result.brokerTelemetryBytes = fsImpl.statSync(brokerTelemetryFile).size;
+      result.brokerTelemetryOverCap = result.brokerTelemetryBytes > MAX_TELEMETRY_BYTES;
     }
   } catch {
     // best-effort

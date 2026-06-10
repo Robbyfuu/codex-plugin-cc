@@ -200,6 +200,26 @@ test("planCleanup rolls oversized telemetry only under --clean and never deletes
   assert.equal(roll[0].path, "/state/telemetry.jsonl");
 });
 
+test("planCleanup rolls oversized BROKER telemetry only under --clean and never deletes it", () => {
+  const report = reportWithBroker("none");
+  report.stateDir.brokerTelemetryOverCap = true;
+  report.stateDir.brokerTelemetryFile = "/state/broker-telemetry.jsonl";
+
+  const fixOnly = planCleanup(report, { fix: true, clean: false });
+  assert.ok(
+    ![...fixOnly.safe, ...fixOnly.gated].some(
+      (action) => action.kind === "roll-telemetry" && action.path === "/state/broker-telemetry.jsonl"
+    ),
+    "broker telemetry roll requires --clean"
+  );
+
+  const withClean = planCleanup(report, { fix: false, clean: true });
+  const roll = withClean.gated.filter(
+    (action) => action.kind === "roll-telemetry" && action.path === "/state/broker-telemetry.jsonl"
+  );
+  assert.equal(roll.length, 1, "the oversized broker telemetry file is rolled under --clean");
+});
+
 // ---------------------------------------------------------------------------
 // THE KILL GATE
 // ---------------------------------------------------------------------------

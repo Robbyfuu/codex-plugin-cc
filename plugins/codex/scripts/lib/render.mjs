@@ -123,6 +123,9 @@ function appendActiveJobsTable(lines, jobs) {
 
 function pushJobDetails(lines, job, options = {}) {
   lines.push(`- ${formatJobLine(job)}`);
+  if (job.resumedFrom) {
+    lines.push(`  Resumed from: ${job.resumedFrom}`);
+  }
   if (job.summary) {
     lines.push(`  Summary: ${job.summary}`);
   }
@@ -443,8 +446,21 @@ export function renderStatsReport(report) {
   lines.push("");
 
   lines.push(`Stall rate: ${formatPercent(report?.stallRate)}`);
-  lines.push(`Restart rate: ${formatPercent(report?.restartRate)}`);
+  // Be honest about WHERE the restart rate comes from. With broker event data it
+  // is real broker churn (recovery-succeeded / total turns); without it the rate
+  // is INFERRED from the interrupted turn bucket.
+  const restartRateSource = report?.restartRateSource === "broker" ? "broker events" : "inferred from the interrupted bucket";
+  lines.push(`Restart rate: ${formatPercent(report?.restartRate)} (${restartRateSource})`);
   lines.push("");
+
+  // Broker section: only when the broker's own event log exists. Shows real
+  // restart counts and recovery failures rather than the interrupted inference.
+  if (report?.hasBrokerData) {
+    lines.push("Broker:");
+    lines.push(`- restarts (recovery-succeeded): ${Number(report?.brokerRestarts) || 0}`);
+    lines.push(`- recovery failures: ${Number(report?.brokerRecoveryFailures) || 0}`);
+    lines.push("");
+  }
 
   // `interrupted` covers any turn that RESOLVED without a clean `completed`
   // status (buildResultStatus maps every non-"completed" final status to a
@@ -457,6 +473,49 @@ export function renderStatsReport(report) {
 
   if (report?.recommendation) {
     lines.push(`Recommendation: ${report.recommendation}`);
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function shortThreadId(threadId) {
+  const value = String(threadId ?? "").trim();
+  if (!value) {
+    return "-";
+  }
+  // Keep history lines compact: a thread id can be long, so show a leading slice.
+  return value.length <= 18 ? value : `${value.slice(0, 15)}...`;
+}
+
+function formatTimestamp(epochMs) {
+  const value = Number(epochMs);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "-";
+  }
+  return new Date(value).toISOString();
+}
+
+export function renderHistoryReport(report) {
+  const total = Number(report?.total) || 0;
+  const entries = Array.isArray(report?.entries) ? report.entries : [];
+  const lines = ["# Codex History", ""];
+
+  if (entries.length === 0) {
+    lines.push("No turns recorded yet for this workspace.");
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  const limit = Number(report?.limit) || entries.length;
+  lines.push(`Showing the ${entries.length} most recent of ${total} recorded turn(s) (limit ${limit}), newest first:`);
+  lines.push("");
+
+  for (const entry of entries) {
+    const timestamp = formatTimestamp(entry.endedAt ?? entry.startedAt);
+    const kind = entry.kind ?? "turn";
+    const title = entry.title ?? "(untitled)";
+    const duration = formatDurationMs(entry.durationMs);
+    const thread = shortThreadId(entry.threadId);
+    lines.push(`- ${timestamp} | ${kind} | ${title} | ${duration} | ${entry.exitReason} | ${thread}`);
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
@@ -478,12 +537,25 @@ export function renderJobStatusReport(job) {
 export function renderStoredJobResult(job, storedJob) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
   const resumeCommand = threadId ? `codex resume ${threadId}` : null;
+  const resumedFrom = storedJob?.resumedFrom ?? job?.resumedFrom ?? null;
+  // Footer appended to every output variant below: the Codex session id + resume
+  // hint when a thread exists, and the resumedFrom link when this job continued
+  // an earlier one. Empty when neither applies.
+  const buildFooter = () => {
+    const footerLines = [];
+    if (resumedFrom) {
+      footerLines.push(`Resumed from: ${resumedFrom}`);
+    }
+    if (threadId) {
+      footerLines.push(`Codex session ID: ${threadId}`);
+      footerLines.push(`Resume in Codex: ${resumeCommand}`);
+    }
+    return footerLines.length > 0 ? `\n${footerLines.join("\n")}\n` : "";
+  };
+
   if (isStructuredReviewStoredResult(storedJob) && storedJob?.rendered) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${buildFooter()}`;
   }
 
   const rawOutput =
@@ -492,18 +564,12 @@ export function renderStoredJobResult(job, storedJob) {
     "";
   if (rawOutput) {
     const output = rawOutput.endsWith("\n") ? rawOutput : `${rawOutput}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${buildFooter()}`;
   }
 
   if (storedJob?.rendered) {
     const output = storedJob.rendered.endsWith("\n") ? storedJob.rendered : `${storedJob.rendered}\n`;
-    if (!threadId) {
-      return output;
-    }
-    return `${output}\nCodex session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}${buildFooter()}`;
   }
 
   const lines = [
@@ -512,6 +578,10 @@ export function renderStoredJobResult(job, storedJob) {
     `Job: ${job.id}`,
     `Status: ${job.status}`
   ];
+
+  if (resumedFrom) {
+    lines.push(`Resumed from: ${resumedFrom}`);
+  }
 
   if (threadId) {
     lines.push(`Codex session ID: ${threadId}`);

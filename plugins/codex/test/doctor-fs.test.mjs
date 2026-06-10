@@ -113,6 +113,45 @@ test("walkStateDir still flags an OLD *.log past the stale window", () => {
   assert.ok(result.staleLogs.includes("/state/jobs/job-old.log"), "old .log is flagged");
 });
 
+test("walkStateDir reports the broker telemetry file size and over-cap flag", () => {
+  const now = 1_000_000_000_000;
+  const overCap = 5 * 1024 * 1024 + 10;
+  const fsImpl = createMemoryFs(
+    {},
+    {
+      "telemetry.jsonl": { size: 100 },
+      "broker-telemetry.jsonl": { size: overCap }
+    }
+  );
+  const result = walkStateDir("/cwd", {
+    env: {},
+    nowMs: now,
+    fsImpl,
+    listJobsImpl: () => [],
+    resolveStateDirImpl: () => STATE_DIR,
+    resolveJobsDirImpl: () => JOBS_DIR,
+    telemetryFile: "/state/telemetry.jsonl",
+    brokerTelemetryFile: "/state/broker-telemetry.jsonl"
+  });
+  assert.equal(result.brokerTelemetryBytes, overCap);
+  assert.equal(result.brokerTelemetryOverCap, true, "an oversized broker telemetry file is flagged over-cap");
+});
+
+test("walkStateDir reports broker telemetry under cap as not over-cap", () => {
+  const fsImpl = createMemoryFs({}, { "broker-telemetry.jsonl": { size: 200 } });
+  const result = walkStateDir("/cwd", {
+    env: {},
+    fsImpl,
+    listJobsImpl: () => [],
+    resolveStateDirImpl: () => STATE_DIR,
+    resolveJobsDirImpl: () => JOBS_DIR,
+    telemetryFile: "/state/telemetry.jsonl",
+    brokerTelemetryFile: "/state/broker-telemetry.jsonl"
+  });
+  assert.equal(result.brokerTelemetryBytes, 200);
+  assert.equal(result.brokerTelemetryOverCap, false);
+});
+
 test("walkStateDir keeps the active-job exclusion for lock files too", () => {
   const now = 1_000_000_000_000;
   const fsImpl = createMemoryFs({ "live.lock": { mtimeMs: now } });

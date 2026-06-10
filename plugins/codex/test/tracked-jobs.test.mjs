@@ -150,6 +150,44 @@ test("runTrackedJob records an interrupted outcome when the turn RESOLVES with a
   });
 });
 
+test("runTrackedJob preserves the job's threadId on the failed record AND outcome when a hard stop kills the turn (F2 resume prerequisite)", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const recorder = captureRecorder();
+    // Simulate the real flow: the thread is created and persisted to the job
+    // record (via progress events) BEFORE the hard-duration ceiling fires. We
+    // model that by pre-writing the running record's threadId, then throwing the
+    // hard-stop stall. The resume path later reads this threadId, so it MUST
+    // survive on both the stored failed record and the telemetry outcome.
+    const job = makeJob(workspaceRoot, { id: "task-hardstop" });
+    const error = new CodexStallError("too long", { reason: "max-duration" });
+
+    await assert.rejects(
+      runTrackedJob(
+        job,
+        async () => {
+          // The turn captured a threadId before stalling: persist it the way the
+          // progress updater would, so the catch branch can read it back.
+          const current = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+          writeJobFile(workspaceRoot, job.id, { ...current, threadId: "thread-survivor" });
+          throw error;
+        },
+        { telemetryRecorder: recorder.recordTurnOutcome }
+      ),
+      (thrown) => thrown === error
+    );
+
+    // The emitted outcome carries the surviving threadId.
+    assert.equal(recorder.outcomes.length, 1);
+    assert.equal(recorder.outcomes[0].exitReason, "hard-stop");
+    assert.equal(recorder.outcomes[0].threadId, "thread-survivor", "the outcome keeps the surviving threadId");
+
+    // The stored FAILED job record still carries threadId so --resume-id can find it.
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.threadId, "thread-survivor", "the failed record keeps threadId for resume");
+  });
+});
+
 test("runTrackedJob folds a genuine thrown Error into an error outcome", async () => {
   await withTempWorkspace(async ({ workspaceRoot }) => {
     const recorder = captureRecorder();

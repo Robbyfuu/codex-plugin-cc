@@ -218,6 +218,115 @@ test("aggregateTelemetry restartRate is zero when there are no interrupted turns
   assert.equal(report.restartRate, 0);
 });
 
+test("aggregateTelemetry merges broker events: real restart counts override the interrupted inference", () => {
+  const records = [
+    sampleOutcome({ exitReason: "completed" }),
+    sampleOutcome({ exitReason: "completed" }),
+    sampleOutcome({ exitReason: "interrupted" }),
+    sampleOutcome({ exitReason: "interrupted" })
+  ];
+  // Three real broker recoveries: two succeeded, one failed.
+  const brokerEvents = [
+    { event: "recovery-started" },
+    { event: "recovery-succeeded" },
+    { event: "recovery-started" },
+    { event: "recovery-succeeded" },
+    { event: "recovery-started" },
+    { event: "recovery-failed" }
+  ];
+
+  const report = aggregateTelemetry(records, { env: {}, brokerEvents });
+
+  assert.equal(report.total, 4);
+  assert.equal(report.brokerRestarts, 2, "brokerRestarts counts recovery-succeeded events");
+  assert.equal(report.brokerRecoveryFailures, 1, "brokerRecoveryFailures counts recovery-failed events");
+  // restartRate now derives from REAL broker restarts / total turns (2/4),
+  // NOT the interrupted-bucket inference (which would have been 2/4 too here,
+  // but the SOURCE is broker data when present).
+  assert.equal(report.restartRate, 2 / 4);
+  assert.equal(report.restartRateSource, "broker", "the metric is sourced from broker data when present");
+});
+
+test("aggregateTelemetry falls back to the interrupted-bucket inference when no broker data exists", () => {
+  const records = [
+    sampleOutcome({ exitReason: "completed" }),
+    sampleOutcome({ exitReason: "completed" }),
+    sampleOutcome({ exitReason: "interrupted" }),
+    sampleOutcome({ exitReason: "interrupted" })
+  ];
+
+  // No brokerEvents passed at all (broker telemetry file absent / older runtime).
+  const report = aggregateTelemetry(records, { env: {} });
+  assert.equal(report.brokerRestarts, 0);
+  assert.equal(report.restartRate, 2 / 4, "falls back to interrupted/total");
+  assert.equal(report.restartRateSource, "interrupted", "honest label: inferred from the interrupted bucket");
+});
+
+test("aggregateTelemetry treats an empty broker-event array as no broker data (honest fallback)", () => {
+  const records = [
+    sampleOutcome({ exitReason: "completed" }),
+    sampleOutcome({ exitReason: "interrupted" })
+  ];
+  const report = aggregateTelemetry(records, { env: {}, brokerEvents: [] });
+  assert.equal(report.restartRateSource, "interrupted", "an empty broker log is NOT broker data");
+  assert.equal(report.restartRate, 1 / 2);
+});
+
+test("aggregateTelemetry windows broker events to the surviving turn span (excludes events older than the oldest turn)", () => {
+  // The two files roll independently at 5MB, so the broker log can outlive the
+  // turn log. Broker events that predate the oldest SURVIVING turn must NOT count
+  // against the (shorter) turn denominator, or the rate inflates beyond reality.
+  const oldestTurnStartedAt = Date.parse("2026-06-01T00:00:00.000Z");
+  const records = [
+    sampleOutcome({ startedAt: oldestTurnStartedAt, endedAt: oldestTurnStartedAt + 5000, exitReason: "completed" }),
+    sampleOutcome({ startedAt: oldestTurnStartedAt + 60000, endedAt: oldestTurnStartedAt + 65000, exitReason: "completed" })
+  ];
+  const brokerEvents = [
+    // Pre-window: from a rolled-away era of turns. Must be excluded.
+    { at: "2026-05-01T00:00:00.000Z", event: "recovery-succeeded" },
+    { at: "2026-05-15T00:00:00.000Z", event: "recovery-succeeded" },
+    { at: "2026-05-20T00:00:00.000Z", event: "recovery-failed" },
+    // In-window: aligned with the surviving turns. Counts.
+    { at: "2026-06-01T00:00:30.000Z", event: "recovery-succeeded" }
+  ];
+
+  const report = aggregateTelemetry(records, { env: {}, brokerEvents });
+  assert.equal(report.brokerRestarts, 1, "only the in-window recovery-succeeded counts");
+  assert.equal(report.brokerRecoveryFailures, 0, "the pre-window failure is excluded too");
+  assert.equal(report.restartRate, 1 / 2, "rate uses the windowed numerator over the turn total");
+  assert.equal(report.restartRateSource, "broker");
+});
+
+test("aggregateTelemetry clamps the displayed restart rate to 1.0 even if broker events still outnumber turns", () => {
+  // Defensive clamp: even after windowing, a degenerate state (e.g. many restarts
+  // recorded within the span of very few turns) must never render > 100%.
+  const startedAt = Date.parse("2026-06-01T00:00:00.000Z");
+  const records = [sampleOutcome({ startedAt, endedAt: startedAt + 5000, exitReason: "completed" })];
+  const brokerEvents = [
+    { at: "2026-06-01T00:00:01.000Z", event: "recovery-succeeded" },
+    { at: "2026-06-01T00:00:02.000Z", event: "recovery-succeeded" },
+    { at: "2026-06-01T00:00:03.000Z", event: "recovery-succeeded" }
+  ];
+  const report = aggregateTelemetry(records, { env: {}, brokerEvents });
+  assert.equal(report.brokerRestarts, 3, "the raw windowed count is still reported honestly");
+  assert.equal(report.restartRate, 1, "the displayed RATE is clamped to 1.0 (never > 100%)");
+});
+
+test("aggregateTelemetry includes broker events with no parseable `at` (cannot be proven out-of-window)", () => {
+  // A malformed/absent `at` cannot be windowed; keep it counted so we never
+  // silently under-report real churn. Windowing only EXCLUDES events provably
+  // older than the surviving span.
+  const startedAt = Date.parse("2026-06-01T00:00:00.000Z");
+  const records = [
+    sampleOutcome({ startedAt, endedAt: startedAt + 5000, exitReason: "completed" }),
+    sampleOutcome({ startedAt: startedAt + 10000, endedAt: startedAt + 15000, exitReason: "completed" })
+  ];
+  const brokerEvents = [{ event: "recovery-succeeded" }]; // no `at`
+  const report = aggregateTelemetry(records, { env: {}, brokerEvents });
+  assert.equal(report.brokerRestarts, 1);
+  assert.equal(report.restartRate, 1 / 2);
+});
+
 test("aggregateTelemetry reports not-enough-data when fewer than 5 records", () => {
   const records = [sampleOutcome(), sampleOutcome()];
   const report = aggregateTelemetry(records, { env: {} });

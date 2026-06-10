@@ -12,6 +12,10 @@ const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const TELEMETRY_FILE_NAME = "telemetry.jsonl";
+// Broker events live in a SIBLING file, deliberately separate from the per-turn
+// telemetry file. The broker is a second writer; keeping it off the turn file
+// avoids adding another concurrent writer to the documented roll race there.
+const BROKER_TELEMETRY_FILE_NAME = "broker-telemetry.jsonl";
 const MAX_JOBS = 50;
 
 function nowIso() {
@@ -263,4 +267,9 @@ export function resolveJobFile(cwd, jobId) {
 export function resolveTelemetryFile(cwd) {
   ensureStateDir(cwd);
   return path.join(resolveStateDir(cwd), TELEMETRY_FILE_NAME);
+}
+
+export function resolveBrokerTelemetryFile(cwd) {
+  ensureStateDir(cwd);
+  return path.join(resolveStateDir(cwd), BROKER_TELEMETRY_FILE_NAME);
 }

@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh|--resume-id <job-id>] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -20,6 +20,7 @@ Execution mode:
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.
+- If the request includes `--resume-id <job-id>`, do not ask whether to continue. This is the manual recovery path for a task killed by the idle/hard-duration ceiling: it resumes that exact surviving Codex thread on a fresh budget as a new linked job. Forward `--resume-id <job-id>` unchanged to `task`. Note: resuming the same job id twice creates two independent linked jobs that both continue the same underlying Codex thread; this is intentional (no dedupe), so avoid double-resuming unless you actually want two parallel continuations.
 - Otherwise, before starting Codex, check for a resumable rescue thread from this Claude session by running:
 
 ```bash

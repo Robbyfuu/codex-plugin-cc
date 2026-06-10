@@ -112,13 +112,21 @@ export function createNotificationRouter(boundGeneration, ctx) {
  * failure (after notifying + invoking onUnrecoverable), so callers/tests can
  * assert the outcome.
  *
+ * `recordEvent` is an optional best-effort telemetry seam: the broker passes a
+ * sink that appends to its own broker-telemetry.jsonl file, so `/codex-plus:stats`
+ * can report REAL restart counts. It is invoked with `recovery-started` before
+ * the swap and either `recovery-succeeded` or `recovery-failed` after, never
+ * throwing into the recovery sequence (broker-routing stays pure/testable; the
+ * sink itself is wired from app-server-broker.mjs).
+ *
  * @param {{
  *   reconnect: () => unknown | Promise<unknown>,
  *   notifyWaiter: () => void,
  *   resetSlot: () => void,
  *   stopIdle: () => void,
  *   onUnrecoverable?: (error: unknown) => void,
- *   logError?: (error: unknown) => void
+ *   logError?: (error: unknown) => void,
+ *   recordEvent?: (event: { event: string }) => void
  * }} deps
  * @returns {Promise<{ recovered: boolean, error?: unknown }>}
  */
@@ -129,8 +137,20 @@ export async function performBrokerRecovery(deps) {
     resetSlot,
     stopIdle,
     onUnrecoverable = () => {},
-    logError = () => {}
+    logError = () => {},
+    recordEvent = () => {}
   } = deps;
+
+  // Best-effort telemetry: a sink failure must never disturb the recovery.
+  const emit = (event) => {
+    try {
+      recordEvent({ event });
+    } catch {
+      // swallow — broker telemetry is observational and never load-bearing.
+    }
+  };
+
+  emit("recovery-started");
 
   try {
     await reconnect();
@@ -139,6 +159,7 @@ export async function performBrokerRecovery(deps) {
     notifyWaiter();
     resetSlot();
     stopIdle();
+    emit("recovery-succeeded");
     return { recovered: true };
   } catch (error) {
     // The child swap failed. The broker can no longer serve requests on this
@@ -148,6 +169,7 @@ export async function performBrokerRecovery(deps) {
     notifyWaiter();
     resetSlot();
     stopIdle();
+    emit("recovery-failed");
     onUnrecoverable(error);
     return { recovered: false, error };
   }

@@ -22,6 +22,16 @@ import {
  * generation may be lost. This is an accepted tradeoff for best-effort telemetry;
  * the read side already tolerates torn/partial lines, so a lost generation only
  * costs old history, never correctness of the live file.
+ *
+ * Cross-file skew caveat (restart rate): the broker event log
+ * (broker-telemetry.jsonl) and this per-turn file roll INDEPENDENTLY at the same
+ * byte cap, and doctor --clean can roll one without the other. The broker-sourced
+ * restart rate divides a broker-file numerator by a turn-file denominator, so the
+ * two inputs can cover different time spans. aggregateTelemetry mitigates this by
+ * WINDOWING the broker numerator to the surviving turn span (it only counts
+ * broker events at/after the oldest surviving turn's startedAt) and CLAMPING the
+ * displayed rate to 1.0. Events with no parseable timestamp cannot be proven
+ * out-of-window and are kept, so the guard never silently under-reports churn.
  */
 
 // Roll the active log to `.jsonl.1` (single generation, overwritten) once it
@@ -68,6 +78,29 @@ function rollIfOversized(fsImpl, filePath) {
 }
 
 /**
+ * Append one record as a JSON line to an explicit telemetry file, rolling it to
+ * a single `.1` generation once it crosses the size cap. Best-effort: any fs
+ * failure (full disk, unwritable path, stat/rename error) is swallowed so the
+ * append never throws into its caller.
+ *
+ * Shared by the per-turn telemetry (recordTurnOutcome) AND the broker event log
+ * (broker-telemetry.mjs) so both files use the SAME append+roll discipline and
+ * the same byte cap, rather than duplicating it.
+ *
+ * @param {string} filePath
+ * @param {object} record
+ * @param {{ fsImpl?: typeof fs }} [options]
+ */
+export function appendTelemetryLine(filePath, record, { fsImpl = fs } = {}) {
+  try {
+    rollIfOversized(fsImpl, filePath);
+    fsImpl.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  } catch {
+    // swallow — telemetry is best-effort and must never throw into the caller.
+  }
+}
+
+/**
  * Append one outcome as a JSON line. Best-effort: any fs failure (full disk,
  * unwritable path, stat/rename error) is swallowed so telemetry never disturbs
  * the turn it is observing.
@@ -76,13 +109,14 @@ function rollIfOversized(fsImpl, filePath) {
  * @param {{ cwd: string, fsImpl?: typeof fs, fileResolver?: (cwd: string) => string }} options
  */
 export function recordTurnOutcome(outcome, { cwd, fsImpl = fs, fileResolver = resolveTelemetryFile } = {}) {
+  let filePath;
   try {
-    const filePath = fileResolver(cwd);
-    rollIfOversized(fsImpl, filePath);
-    fsImpl.appendFileSync(filePath, `${JSON.stringify(outcome)}\n`, "utf8");
+    filePath = fileResolver(cwd);
   } catch {
-    // swallow — telemetry is best-effort and must never throw into the caller.
+    // The resolver mkdirs the state dir; a failure there must not throw either.
+    return;
   }
+  appendTelemetryLine(filePath, outcome, { fsImpl });
 }
 
 /**
@@ -184,7 +218,7 @@ function buildRecommendation({ total, countByReason, durationP95, env }) {
  * Aggregate raw telemetry records into a status-ready report.
  *
  * @param {object[]} records
- * @param {{ env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ env?: NodeJS.ProcessEnv, brokerEvents?: object[] }} [options]
  * @returns {{
  *   total: number,
  *   countByReason: Record<string, number>,
@@ -193,16 +227,23 @@ function buildRecommendation({ total, countByReason, durationP95, env }) {
  *   durationMax: number,
  *   stallRate: number,
  *   restartRate: number,
+ *   restartRateSource: "broker" | "interrupted",
+ *   brokerRestarts: number,
+ *   brokerRecoveryFailures: number,
+ *   hasBrokerData: boolean,
  *   recommendation: string
  * }}
  */
-export function aggregateTelemetry(records, { env = {} } = {}) {
+export function aggregateTelemetry(records, { env = {}, brokerEvents } = {}) {
   const list = Array.isArray(records) ? records : [];
   const total = list.length;
 
   const countByReason = {};
   let stalls = 0;
   let interrupted = 0;
+  // Track the oldest surviving turn's start so the broker numerator can be
+  // windowed to the same span the turn denominator covers (see below).
+  let oldestTurnStartedAt = Infinity;
   for (const record of list) {
     const reason = typeof record?.exitReason === "string" && record.exitReason ? record.exitReason : "unknown";
     countByReason[reason] = (countByReason[reason] ?? 0) + 1;
@@ -211,6 +252,10 @@ export function aggregateTelemetry(records, { env = {} } = {}) {
     }
     if (reason === INTERRUPTED_REASON) {
       interrupted += 1;
+    }
+    const startedAt = Number(record?.startedAt);
+    if (Number.isFinite(startedAt) && startedAt < oldestTurnStartedAt) {
+      oldestTurnStartedAt = startedAt;
     }
     // NOTE: record.restartCount is intentionally NOT summed into the restart
     // rate. It has no companion-side source (always 0), so the only honest
@@ -224,10 +269,48 @@ export function aggregateTelemetry(records, { env = {} } = {}) {
   const durationMax = durations.length > 0 ? durations[durations.length - 1] : 0;
 
   const stallRate = total > 0 ? stalls / total : 0;
-  // Restart rate = broker self-heals (interrupted turns) / total. This is the
-  // first time the metric reflects something real instead of always-zero
-  // restartCount data.
-  const restartRate = total > 0 ? interrupted / total : 0;
+
+  // Broker churn from the broker's OWN event log (the sibling broker-telemetry
+  // file). When present this is the FIRST companion-side source of real restart
+  // counts — recovery-succeeded is a completed child swap. recovery-failed is a
+  // recovery that could not reconnect (the broker fails fast afterward).
+  //
+  // DENOMINATOR-SKEW GUARD: the broker event file and the turn file roll
+  // INDEPENDENTLY at the same byte cap (and doctor --clean can roll one without
+  // the other), so the broker log can outlive the turn log it is divided against.
+  // To keep brokerRestarts/total honest we WINDOW the broker numerator to the
+  // surviving turn span: only count events whose `at` is at or after the oldest
+  // surviving turn's `startedAt`. Events with an unparseable/absent `at` cannot be
+  // proven out-of-window, so they are KEPT (never silently under-report churn).
+  // This is the same spirit as the unlocked-roll caveat documented on the file:
+  // a lost generation costs old history, never correctness of the live window.
+  const brokerEventList = Array.isArray(brokerEvents) ? brokerEvents : [];
+  const hasBrokerData = brokerEventList.length > 0;
+  const windowStart = Number.isFinite(oldestTurnStartedAt) ? oldestTurnStartedAt : -Infinity;
+  let brokerRestarts = 0;
+  let brokerRecoveryFailures = 0;
+  for (const event of brokerEventList) {
+    const at = Date.parse(event?.at);
+    // Exclude only events PROVABLY older than the surviving turn span.
+    if (Number.isFinite(at) && at < windowStart) {
+      continue;
+    }
+    if (event?.event === "recovery-succeeded") {
+      brokerRestarts += 1;
+    } else if (event?.event === "recovery-failed") {
+      brokerRecoveryFailures += 1;
+    }
+  }
+
+  // Restart rate prefers REAL broker data (windowed brokerRestarts / total turns)
+  // when the broker event log exists; otherwise it falls back to the honest
+  // inference from the `interrupted` turn bucket. restartRateSource keeps the
+  // label honest so the renderer can say which one it is. The displayed rate is
+  // CLAMPED to 1.0 as a final defense: even after windowing, a degenerate burst
+  // of restarts within a tiny turn window must never render above 100%.
+  const restartRateSource = hasBrokerData ? "broker" : "interrupted";
+  const restartNumerator = hasBrokerData ? brokerRestarts : interrupted;
+  const restartRate = total > 0 ? Math.min(1, restartNumerator / total) : 0;
 
   return {
     total,
@@ -237,6 +320,10 @@ export function aggregateTelemetry(records, { env = {} } = {}) {
     durationMax,
     stallRate,
     restartRate,
+    restartRateSource,
+    brokerRestarts,
+    brokerRecoveryFailures,
+    hasBrokerData,
     recommendation: buildRecommendation({ total, countByReason, durationP95, env })
   };
 }

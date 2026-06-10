@@ -64,6 +64,44 @@ test("captureTurn rejects with CodexStallError and interrupts when the turn idle
   assert.deepEqual(interrupt.params, { threadId: "thread-1", turnId: "turn-1" });
 });
 
+test("captureTurn idle-stall message tells the user how to resume the surviving thread (F2)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const client = createFakeClient();
+  const env = { CODEX_COMPANION_IDLE_TIMEOUT_MS: "1000", CODEX_COMPANION_MAX_TURN_MS: "100000" };
+
+  const pending = captureTurn(client, "thread-1", () => Promise.resolve({ turn: { id: "turn-1", status: "inProgress" } }), { env });
+  await flushMicrotasks();
+  t.mock.timers.tick(1001);
+
+  await assert.rejects(pending, (error) => {
+    assert.ok(error instanceof CodexStallError);
+    // The hint must name the REAL user-facing slash command. `/codex-plus:task`
+    // does not exist (task is an internal companion subcommand); the user path is
+    // `/codex-plus:rescue --resume-id <job-id>`.
+    assert.match(error.message, /rescue --resume-id/, "the idle-stall message names the real /codex-plus:rescue command");
+    assert.doesNotMatch(error.message, /codex-plus:task --resume-id/, "must not point at the nonexistent /codex-plus:task command");
+    return true;
+  });
+});
+
+test("captureTurn hard-stop message tells the user how to resume the surviving thread (F2)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const client = createFakeClient();
+  const env = { CODEX_COMPANION_IDLE_TIMEOUT_MS: "100000", CODEX_COMPANION_MAX_TURN_MS: "1000" };
+
+  const pending = captureTurn(client, "thread-1", () => Promise.resolve({ turn: { id: "turn-1", status: "inProgress" } }), { env });
+  await flushMicrotasks();
+  t.mock.timers.tick(1001);
+
+  await assert.rejects(pending, (error) => {
+    assert.ok(error instanceof CodexStallError);
+    assert.equal(error.reason, "max-duration");
+    assert.match(error.message, /rescue --resume-id/, "the hard-stop message names the real /codex-plus:rescue command");
+    assert.doesNotMatch(error.message, /codex-plus:task --resume-id/, "must not point at the nonexistent /codex-plus:task command");
+    return true;
+  });
+});
+
 test("captureTurn does not stall while notifications keep arriving, then completes", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const client = createFakeClient();

@@ -289,6 +289,66 @@ test("CR2: a thrown (non-rejection) reconnect is handled the same way", async ()
   );
 });
 
+test("performBrokerRecovery records recovery-started then recovery-succeeded on the happy path", async () => {
+  const events = [];
+  const outcome = await performBrokerRecovery({
+    reconnect: () => Promise.resolve(),
+    notifyWaiter: () => {},
+    resetSlot: () => {},
+    stopIdle: () => {},
+    recordEvent: (event) => events.push(event)
+  });
+
+  assert.equal(outcome.recovered, true);
+  assert.deepEqual(
+    events.map((entry) => entry.event),
+    ["recovery-started", "recovery-succeeded"],
+    "a successful swap records a started then a succeeded event, in order"
+  );
+});
+
+test("performBrokerRecovery records recovery-started then recovery-failed when reconnect fails", async () => {
+  const events = [];
+  const outcome = await performBrokerRecovery({
+    reconnect: () => Promise.reject(new Error("connect ECONNREFUSED")),
+    notifyWaiter: () => {},
+    resetSlot: () => {},
+    stopIdle: () => {},
+    recordEvent: (event) => events.push(event)
+  });
+
+  assert.equal(outcome.recovered, false);
+  assert.deepEqual(
+    events.map((entry) => entry.event),
+    ["recovery-started", "recovery-failed"],
+    "a failed reconnect records a started then a failed event"
+  );
+});
+
+test("performBrokerRecovery tolerates an omitted recordEvent (defaults to no-op)", async () => {
+  const outcome = await performBrokerRecovery({
+    reconnect: () => Promise.resolve(),
+    notifyWaiter: () => {},
+    resetSlot: () => {},
+    stopIdle: () => {}
+    // recordEvent intentionally omitted
+  });
+  assert.equal(outcome.recovered, true, "missing recordEvent must not throw");
+});
+
+test("performBrokerRecovery: a throwing recordEvent never breaks recovery", async () => {
+  const outcome = await performBrokerRecovery({
+    reconnect: () => Promise.resolve(),
+    notifyWaiter: () => {},
+    resetSlot: () => {},
+    stopIdle: () => {},
+    recordEvent: () => {
+      throw new Error("telemetry exploded");
+    }
+  });
+  assert.equal(outcome.recovered, true, "a recordEvent failure must be swallowed, not propagated");
+});
+
 test("performBrokerRecovery tolerates an omitted onUnrecoverable (defaults to no-op)", async () => {
   const outcome = await performBrokerRecovery({
     reconnect: () => Promise.reject(new Error("boom")),

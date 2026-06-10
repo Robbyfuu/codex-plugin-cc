@@ -20,9 +20,14 @@ import { deriveActiveJobIds, jobIdFromArtifact, walkStateDir } from "./doctor-fs
 // telemetry path PURELY from resolveStateDir — resolveTelemetryFile() would
 // mkdir the state dir, which would violate doctor's read-only contract.
 const TELEMETRY_FILE_NAME = "telemetry.jsonl";
+const BROKER_TELEMETRY_FILE_NAME = "broker-telemetry.jsonl";
 
 function resolveTelemetryPathReadOnly(cwd) {
   return path.join(resolveStateDir(cwd), TELEMETRY_FILE_NAME);
+}
+
+function resolveBrokerTelemetryPathReadOnly(cwd) {
+  return path.join(resolveStateDir(cwd), BROKER_TELEMETRY_FILE_NAME);
 }
 
 /**
@@ -90,6 +95,8 @@ export async function buildDoctorReport(cwd, { env = process.env, deps = {} } = 
   const resolveStateDirImpl = deps.resolveStateDirImpl ?? resolveStateDir;
   // Read-only: derive the telemetry path without mkdir (resolveTelemetryFile mkdirs).
   const resolveTelemetryFileImpl = deps.resolveTelemetryFileImpl ?? resolveTelemetryPathReadOnly;
+  const resolveBrokerTelemetryFileImpl =
+    deps.resolveBrokerTelemetryFileImpl ?? resolveBrokerTelemetryPathReadOnly;
   const walkStateDirImpl = deps.walkStateDirImpl ?? walkStateDir;
 
   const codex = getCodexAvailabilityImpl(cwd);
@@ -104,7 +111,8 @@ export async function buildDoctorReport(cwd, { env = process.env, deps = {} } = 
 
   const stateDirPath = resolveStateDirImpl(cwd);
   const telemetryFile = resolveTelemetryFileImpl(cwd);
-  const walk = walkStateDirImpl(cwd, { env, telemetryFile }) ?? {};
+  const brokerTelemetryFile = resolveBrokerTelemetryFileImpl(cwd);
+  const walk = walkStateDirImpl(cwd, { env, telemetryFile, brokerTelemetryFile }) ?? {};
   const stateDir = {
     path: stateDirPath,
     totalBytes: walk.totalBytes ?? 0,
@@ -112,7 +120,10 @@ export async function buildDoctorReport(cwd, { env = process.env, deps = {} } = 
     orphanPaneMarkers: walk.orphanPaneMarkers ?? [],
     telemetryBytes: walk.telemetryBytes ?? 0,
     telemetryOverCap: Boolean(walk.telemetryOverCap),
-    telemetryFile
+    telemetryFile,
+    brokerTelemetryBytes: walk.brokerTelemetryBytes ?? 0,
+    brokerTelemetryOverCap: Boolean(walk.brokerTelemetryOverCap),
+    brokerTelemetryFile
   };
 
   const broker = {
@@ -204,6 +215,15 @@ function collectIssues({ codex, broker, stateDir, activeJobCount }) {
     });
   }
 
+  if (stateDir.brokerTelemetryOverCap) {
+    issues.push({
+      kind: "broker-telemetry-over-cap",
+      severity: SEVERITY.low,
+      detail: `Broker telemetry file is ${stateDir.brokerTelemetryBytes} bytes, over the roll cap.`,
+      autoFixable: false
+    });
+  }
+
   return issues;
 }
 
@@ -285,6 +305,16 @@ export function planCleanup(report, { fix = false, clean = false } = {}) {
         kind: "roll-telemetry",
         detail: `Roll oversized telemetry ${stateDir.telemetryFile} to a single rolled generation (never deleted).`,
         path: stateDir.telemetryFile
+      });
+    }
+
+    // Gated: roll the oversized broker event log too. Same roll discipline and
+    // byte cap as the per-turn telemetry file; never deleted.
+    if (stateDir.brokerTelemetryOverCap) {
+      gated.push({
+        kind: "roll-telemetry",
+        detail: `Roll oversized broker telemetry ${stateDir.brokerTelemetryFile} to a single rolled generation (never deleted).`,
+        path: stateDir.brokerTelemetryFile
       });
     }
   }

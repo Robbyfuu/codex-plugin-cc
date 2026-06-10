@@ -76,6 +76,7 @@ test("continue is not exposed as a user-facing command", () => {
     "adversarial-review.md",
     "cancel.md",
     "doctor.md",
+    "history.md",
     "rescue.md",
     "result.md",
     "review.md",
@@ -174,6 +175,23 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(readme, /### `\/codex-plus:cancel`/);
 });
 
+test("rescue path forwards --resume-id end-to-end so the stall hint is real", () => {
+  const rescue = read("commands/rescue.md");
+  const agent = read("agents/codex-rescue.md");
+  const runtimeSkill = read("skills/codex-cli-runtime/SKILL.md");
+
+  // The stall-error hint points users at `/codex-plus:rescue --resume-id <job-id>`,
+  // so every layer of that path must actually forward the flag to `task`.
+  assert.match(rescue, /--resume\|--fresh\|--resume-id <job-id>/, "the rescue argument-hint advertises --resume-id");
+  assert.match(rescue, /Forward `--resume-id <job-id>` unchanged to `task`/i);
+  assert.match(agent, /`--resume-id <job-id>` means forward `--resume-id <job-id>` to `task` unchanged/i);
+  assert.match(runtimeSkill, /pass it through to `task` unchanged \(`task --resume-id <job-id>`\)/i);
+  // It must NOT be collapsed into --resume-last (that would lose the exact thread).
+  assert.match(runtimeSkill, /Do not translate it to `--resume-last`/i);
+  // Documents the no-dedupe behavior so a double-resume is a deliberate choice.
+  assert.match(rescue, /resuming the same job id twice creates two independent linked jobs/i);
+});
+
 test("result and cancel commands are exposed as deterministic runtime entrypoints", () => {
   const result = read("commands/result.md");
   const cancel = read("commands/cancel.md");
@@ -185,6 +203,20 @@ test("result and cancel commands are exposed as deterministic runtime entrypoint
   assert.match(cancel, /codex-companion\.mjs" cancel "\$ARGUMENTS"/);
   assert.match(resultHandling, /do not turn a failed or incomplete Codex run into a Claude-side implementation attempt/i);
   assert.match(resultHandling, /if Codex was never successfully invoked, do not generate a substitute answer at all/i);
+});
+
+test("history command is a deterministic runtime entrypoint mirroring stats", () => {
+  const history = read("commands/history.md");
+  assert.match(history, /disable-model-invocation:\s*true/);
+  assert.match(history, /allowed-tools:\s*Bash\(node:\*\)/);
+  assert.match(history, /argument-hint:\s*'\[--limit <n>\] \[--json\]'/);
+  assert.match(history, /codex-companion\.mjs" history "\$ARGUMENTS"/);
+  // Focused on turns only — broker events are NOT part of history.
+  assert.match(history, /turns only/i);
+  assert.match(history, /newest[- ]first/i);
+  assert.match(history, /--limit/);
+  // Verbatim-presentation contract, like stats.
+  assert.match(history, /exactly as produced/i);
 });
 
 test("internal docs use task terminology for rescue runs", () => {
