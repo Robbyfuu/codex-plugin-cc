@@ -7,9 +7,12 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { resolveStateDir } from "./state.mjs";
+import { parsePositiveInt } from "./watchdog.mjs";
 
 export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
 export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
+export const SHUTDOWN_TIMEOUT_ENV = "CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS";
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 3000;
 const BROKER_STATE_FILE = "broker.json";
 
 export function createBrokerSessionDir(prefix = "cxc-") {
@@ -40,19 +43,60 @@ export async function waitForBrokerEndpoint(endpoint, timeoutMs = 2000) {
   return false;
 }
 
-export async function sendBrokerShutdown(endpoint) {
+/**
+ * Ask the broker to shut down. Bounded by a timeout so a never-responding (or
+ * wedged) broker can never hang the SessionEnd hook (#7). On timeout we resolve
+ * anyway — the caller (handleSessionEnd) proceeds to the best-effort
+ * teardownBrokerSession path, which kills the pid and removes the socket.
+ *
+ * The timeout is overridable via CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS (parsed
+ * with parsePositiveInt; a malformed value falls back to the default).
+ *
+ * @param {string | null | undefined} endpoint
+ * @param {{ timeoutMs?: number, env?: NodeJS.ProcessEnv }} [options]
+ */
+export async function sendBrokerShutdown(endpoint, options = {}) {
+  if (!endpoint) {
+    return;
+  }
+  const env = options.env ?? process.env;
+  const timeoutMs =
+    options.timeoutMs ?? parsePositiveInt(env[SHUTDOWN_TIMEOUT_ENV], DEFAULT_SHUTDOWN_TIMEOUT_MS);
+
   await new Promise((resolve) => {
-    const socket = connectToEndpoint(endpoint);
+    let settled = false;
+    let socket;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.end();
+      } catch {
+        // socket may already be closing
+      }
+      resolve();
+    };
+
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref?.();
+
+    try {
+      socket = connectToEndpoint(endpoint);
+    } catch {
+      finish();
+      return;
+    }
+
     socket.setEncoding("utf8");
     socket.on("connect", () => {
       socket.write(`${JSON.stringify({ id: 1, method: "broker/shutdown", params: {} })}\n`);
     });
-    socket.on("data", () => {
-      socket.end();
-      resolve();
-    });
-    socket.on("error", resolve);
-    socket.on("close", resolve);
+    socket.on("data", finish);
+    socket.on("error", finish);
+    socket.on("close", finish);
   });
 }
 

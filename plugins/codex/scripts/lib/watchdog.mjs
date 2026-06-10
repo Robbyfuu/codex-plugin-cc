@@ -54,7 +54,7 @@ export class CodexTimeoutError extends Error {
  * @param {number} fallback
  * @returns {number}
  */
-function parsePositiveInt(value, fallback) {
+export function parsePositiveInt(value, fallback) {
   if (value === undefined || value === null || String(value).trim() === "") {
     return fallback;
   }

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { runTrackedJob } from "../scripts/lib/tracked-jobs.mjs";
+import { flushJobToFailed, registerWorkerTerminationHandlers, runTrackedJob } from "../scripts/lib/tracked-jobs.mjs";
+import { resolveJobFile, writeJobFile } from "../scripts/lib/state.mjs";
 import { CodexStallError } from "../scripts/lib/watchdog.mjs";
 
 /**
@@ -262,4 +263,197 @@ test("runTrackedJob: a throwing telemetry recorder does NOT starve the notifier 
     assert.equal(result, execution);
     assert.equal(notified.length, 1, "the notifier must still fire even when telemetry throws first");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #228: a worker that receives SIGTERM/SIGINT must flush its in-flight
+// job to `failed` before dying, instead of stranding it as `running`.
+// ---------------------------------------------------------------------------
+
+test("flushJobToFailed persists a running job as failed with the supplied note", async () => {
+  await withTempWorkspace(({ workspaceRoot }) => {
+    const job = {
+      id: "task-flush",
+      status: "running",
+      jobClass: "task",
+      pid: process.pid,
+      createdAt: "2026-03-18T15:32:00.000Z",
+      updatedAt: "2026-03-18T15:33:00.000Z"
+    };
+    writeJobFile(workspaceRoot, job.id, job);
+    flushJobToFailed(workspaceRoot, job.id, "worker received SIGTERM; flushing job to failed");
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.pid, null);
+    assert.match(String(stored.error ?? stored.errorMessage ?? ""), /SIGTERM/i);
+  });
+});
+
+test("flushJobToFailed does NOT overwrite a job already in a terminal status (cancel race, #cancel-race)", async () => {
+  await withTempWorkspace(({ workspaceRoot }) => {
+    // The cancel race: /codex-plus:cancel writes `cancelled` while the parent
+    // SIGTERMs the worker tree; the worker's termination handler then races a
+    // `failed` flush over the SAME unlocked job. A user-cancelled job must never
+    // be clobbered into `failed`.
+    const job = {
+      id: "task-cancelled",
+      status: "cancelled",
+      jobClass: "task",
+      pid: null,
+      createdAt: "2026-03-18T15:32:00.000Z",
+      updatedAt: "2026-03-18T15:33:00.000Z",
+      completedAt: "2026-03-18T15:34:00.000Z"
+    };
+    writeJobFile(workspaceRoot, job.id, job);
+
+    flushJobToFailed(workspaceRoot, job.id, "worker received SIGTERM; flushing job to failed");
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "cancelled", "a terminal `cancelled` status must NOT be overwritten by the flush handler");
+  });
+});
+
+test("flushJobToFailed does NOT overwrite a completed job (terminal-status guard)", async () => {
+  await withTempWorkspace(({ workspaceRoot }) => {
+    const job = {
+      id: "task-completed",
+      status: "completed",
+      jobClass: "task",
+      pid: null,
+      createdAt: "2026-03-18T15:32:00.000Z",
+      updatedAt: "2026-03-18T15:33:00.000Z",
+      completedAt: "2026-03-18T15:34:00.000Z"
+    };
+    writeJobFile(workspaceRoot, job.id, job);
+
+    flushJobToFailed(workspaceRoot, job.id, "worker received SIGINT; flushing job to failed");
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "completed", "a terminal `completed` status must NOT be overwritten by the flush handler");
+  });
+});
+
+test("flushJobToFailed is best-effort: a write failure does not throw", async () => {
+  await withTempWorkspace(({ workspaceRoot }) => {
+    assert.doesNotThrow(() => {
+      flushJobToFailed(workspaceRoot, "task-missing", "note", {
+        writeJobFileImpl() {
+          throw new Error("disk full");
+        }
+      });
+    });
+  });
+});
+
+// A fake process that records listeners per signal as an array, so we can
+// assert on listener hygiene (specific removal, not removeAllListeners).
+function makeFakeProcess(pid = 4242) {
+  const listeners = new Map();
+  const calls = [];
+  return {
+    listeners,
+    calls,
+    pid,
+    once(signal, handler) {
+      const list = listeners.get(signal) ?? [];
+      list.push(handler);
+      listeners.set(signal, list);
+    },
+    removeListener(signal, handler) {
+      const list = listeners.get(signal) ?? [];
+      const next = list.filter((entry) => entry !== handler);
+      listeners.set(signal, next);
+    },
+    removeAllListeners(signal) {
+      // Present so an accidental broad-removal regression is observable: if the
+      // implementation ever calls this, the foreign-listener assertion fails.
+      listeners.set(signal, []);
+      calls.push({ kind: "removeAllListeners", signal });
+    },
+    kill(killPid, signal) {
+      calls.push({ kind: "kill", pid: killPid, signal });
+    }
+  };
+}
+
+test("registerWorkerTerminationHandlers flushes the job to failed on SIGTERM and re-raises", () => {
+  const fakeProcess = makeFakeProcess();
+
+  registerWorkerTerminationHandlers({
+    workspaceRoot: "/tmp/ws",
+    jobId: "task-sig",
+    proc: fakeProcess,
+    flushImpl(workspaceRoot, jobId, note) {
+      fakeProcess.calls.push({ kind: "flush", workspaceRoot, jobId, note });
+    }
+  });
+
+  assert.ok((fakeProcess.listeners.get("SIGTERM") ?? []).length > 0, "a SIGTERM handler must be registered");
+  assert.ok((fakeProcess.listeners.get("SIGINT") ?? []).length > 0, "a SIGINT handler must be registered");
+
+  // Fire SIGTERM.
+  fakeProcess.listeners.get("SIGTERM")[0]("SIGTERM");
+
+  const flush = fakeProcess.calls.find((entry) => entry.kind === "flush");
+  assert.equal(flush.jobId, "task-sig");
+  assert.match(flush.note, /SIGTERM/);
+  // The default-signal behavior is restored and re-raised so the process still
+  // dies with the right disposition.
+  const reraise = fakeProcess.calls.find((entry) => entry.kind === "kill");
+  assert.equal(reraise.signal, "SIGTERM");
+});
+
+test("registerWorkerTerminationHandlers removes ONLY its own handler and never nukes foreign listeners", () => {
+  const fakeProcess = makeFakeProcess();
+  // A foreign listener some other code legitimately registered for SIGTERM.
+  const foreign = () => {};
+  fakeProcess.once("SIGTERM", foreign);
+
+  registerWorkerTerminationHandlers({
+    workspaceRoot: "/tmp/ws",
+    jobId: "task-hygiene",
+    proc: fakeProcess,
+    flushImpl() {}
+  });
+
+  // Our handler is the one registered AFTER the foreign listener.
+  const sigtermListeners = fakeProcess.listeners.get("SIGTERM");
+  const ourHandler = sigtermListeners[sigtermListeners.length - 1];
+  ourHandler("SIGTERM");
+
+  assert.equal(
+    fakeProcess.calls.some((entry) => entry.kind === "removeAllListeners"),
+    false,
+    "must NOT call removeAllListeners (that would nuke foreign listeners)"
+  );
+  assert.ok(
+    fakeProcess.listeners.get("SIGTERM").includes(foreign),
+    "a foreign SIGTERM listener must survive — only our own handler is removed"
+  );
+  assert.equal(
+    fakeProcess.listeners.get("SIGTERM").includes(ourHandler),
+    false,
+    "our own handler must be removed via removeListener"
+  );
+});
+
+test("registerWorkerTerminationHandlers flushes at most once when both signals fire (no double-flush)", () => {
+  const fakeProcess = makeFakeProcess();
+  let flushCount = 0;
+
+  registerWorkerTerminationHandlers({
+    workspaceRoot: "/tmp/ws",
+    jobId: "task-double",
+    proc: fakeProcess,
+    flushImpl() {
+      flushCount += 1;
+    }
+  });
+
+  // Simulate SIGTERM then SIGINT both arriving during teardown.
+  fakeProcess.listeners.get("SIGTERM")[0]("SIGTERM");
+  fakeProcess.listeners.get("SIGINT")[0]("SIGINT");
+
+  assert.equal(flushCount, 1, "the shared guard must prevent a second flush from the second signal");
 });

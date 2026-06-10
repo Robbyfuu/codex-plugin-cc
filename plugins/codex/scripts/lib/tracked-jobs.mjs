@@ -107,6 +107,131 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
+// A job in one of these statuses has already SETTLED. The shutdown flush must
+// never clobber a settled job: doing so loses a user's `cancelled` outcome (the
+// cancel race) or rewrites a `completed`/`failed` job. Only an in-flight job
+// (`running`/`queued`) is eligible to be flushed to `failed`.
+const FLUSHABLE_STATUSES = new Set(["running", "queued"]);
+
+/**
+ * Best-effort flush of an in-flight job to `failed`. Used by the worker's
+ * termination handlers (#228) so a worker killed by SIGTERM/SIGINT does not
+ * strand its job as `running`. Mirrors runTrackedJob's catch-branch shape
+ * (status/phase/pid/completedAt) so the record looks like any other failure.
+ *
+ * Cancel-race guard: on `/codex-plus:cancel`, the parent writes `cancelled`
+ * while it SIGTERMs the worker tree, racing this handler over the SAME unlocked
+ * job. So this re-reads the current job status and flushes ONLY when it is still
+ * `running`/`queued`; a terminal status (`cancelled`/`completed`/`failed`) is
+ * left untouched. A missing job record is treated as flushable (the worker died
+ * before persisting) so we still record the abnormal termination.
+ *
+ * Never throws: a read/write failure is swallowed so it stays safe to call from
+ * a signal handler during shutdown.
+ *
+ * @param {string} workspaceRoot
+ * @param {string} jobId
+ * @param {string} note human-readable failure note
+ * @param {{ writeJobFileImpl?: typeof writeJobFile, upsertJobImpl?: typeof upsertJob }} [options]
+ */
+export function flushJobToFailed(workspaceRoot, jobId, note, options = {}) {
+  const writeJobFileImpl = options.writeJobFileImpl ?? writeJobFile;
+  const upsertJobImpl = options.upsertJobImpl ?? upsertJob;
+
+  // Re-read to lose as little of the cancel race as possible. If the current
+  // status is already terminal, do NOTHING — never overwrite a settled outcome.
+  let existing;
+  try {
+    existing = readStoredJobOrNull(workspaceRoot, jobId);
+  } catch {
+    // A read failure must not strand the worker: fall through and attempt the
+    // flush as if the record were absent.
+    existing = null;
+  }
+  if (existing && !FLUSHABLE_STATUSES.has(existing.status)) {
+    return;
+  }
+
+  const completedAt = nowIso();
+  const base = existing ?? { id: jobId };
+  try {
+    writeJobFileImpl(workspaceRoot, jobId, {
+      ...base,
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      error: note,
+      errorMessage: base.errorMessage ?? note,
+      completedAt
+    });
+  } catch {
+    // Best-effort: never throw out of a shutdown path.
+  }
+  try {
+    upsertJobImpl(workspaceRoot, {
+      id: jobId,
+      status: "failed",
+      phase: "failed",
+      pid: null,
+      error: note,
+      errorMessage: note,
+      completedAt
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
+ * Register SIGTERM/SIGINT handlers on the worker process so that, when the
+ * detached task worker is killed (session teardown, manual cancel, reboot
+ * signal), the in-flight job is flushed to `failed` before the process exits
+ * (#228). After flushing, the handler restores the default disposition and
+ * re-raises the same signal so the process still terminates with the correct
+ * exit semantics.
+ *
+ * @param {{
+ *   workspaceRoot: string,
+ *   jobId: string,
+ *   proc?: NodeJS.Process,
+ *   flushImpl?: typeof flushJobToFailed
+ * }} params
+ */
+export function registerWorkerTerminationHandlers({ workspaceRoot, jobId, proc = process, flushImpl = flushJobToFailed }) {
+  const signals = ["SIGTERM", "SIGINT"];
+  // Shared single-flush guard: if SIGTERM and SIGINT both arrive (or the same
+  // signal fires more than once), the job must be flushed AT MOST once. The
+  // terminal-status re-check inside flushJobToFailed complements this, but the
+  // guard avoids redundant reads/writes from the second signal entirely.
+  let flushed = false;
+
+  const handlers = new Map();
+  for (const signal of signals) {
+    const handler = () => {
+      if (!flushed) {
+        flushed = true;
+        flushImpl(workspaceRoot, jobId, `worker received ${signal}; flushing job to failed (pid ${proc.pid} terminating)`);
+      }
+      // Remove ONLY our own handler for this signal — never `removeAllListeners`,
+      // which would nuke foreign listeners other code legitimately registered.
+      try {
+        proc.removeListener(signal, handler);
+      } catch {
+        // ignore — best-effort detach.
+      }
+      try {
+        proc.kill(proc.pid, signal);
+      } catch {
+        // If re-raising fails for any reason, fall back to a clean exit so we
+        // never leave the worker wedged.
+        proc.exit?.(1);
+      }
+    };
+    handlers.set(signal, handler);
+    proc.once(signal, handler);
+  }
+}
+
 function normalizeProgressEvent(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return {

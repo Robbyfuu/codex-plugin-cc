@@ -53,6 +53,7 @@ import {
   createJobRecord,
   createProgressReporter,
   nowIso,
+  registerWorkerTerminationHandlers,
   runTrackedJob,
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mjs";
@@ -621,13 +622,13 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
   };
 }
 
-function readTaskPrompt(cwd, options, positionals) {
+async function readTaskPrompt(cwd, options, positionals) {
   if (options["prompt-file"]) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
   }
 
   const positionalPrompt = positionals.join(" ");
-  return positionalPrompt || readStdinIfPiped();
+  return positionalPrompt || (await readStdinIfPiped());
 }
 
 function requireTaskRequest(prompt, resumeLast) {
@@ -753,7 +754,7 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
-  const prompt = readTaskPrompt(cwd, options, positionals);
+  const prompt = await readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const fresh = Boolean(options.fresh);
@@ -818,6 +819,11 @@ async function handleTaskWorker(argv) {
   if (!storedJob) {
     throw new Error(`No stored job found for ${options["job-id"]}.`);
   }
+
+  // #228: if this detached worker is killed (session teardown, reboot signal),
+  // flush the in-flight job to `failed` before dying so it is never stranded as
+  // `running`.
+  registerWorkerTerminationHandlers({ workspaceRoot, jobId: options["job-id"] });
 
   const request = storedJob.request;
   if (!request || typeof request !== "object") {

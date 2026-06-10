@@ -1,6 +1,38 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
+/**
+ * Is a pid currently alive? Probe with signal 0; ESRCH means it is gone. Any
+ * other error (e.g. EPERM) is treated as "alive" since the process exists.
+ *
+ * Hardening: require pid > 0. `kill(0, …)` targets the CALLER's own process
+ * group and `kill(-0, …)` is likewise group-relative — both are dangerous and
+ * meaningless as a liveness probe. A real worker/broker pid is always > 0, so
+ * requiring it makes signalling pid 0 / -0 structurally impossible.
+ *
+ * This is the SINGLE source of truth for liveness: doctor.mjs re-exports it and
+ * state.mjs uses it to reconcile stranded jobs.
+ *
+ * @param {number | null | undefined} pid
+ * @param {(pid: number, signal: number) => void} [killImpl]
+ * @returns {boolean}
+ */
+export function isPidAlive(pid, killImpl = process.kill.bind(process)) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    killImpl(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ESRCH") {
+      return false;
+    }
+    // EPERM (or anything non-ESRCH): the process exists, we just cannot signal it.
+    return true;
+  }
+}
+
 export function runCommand(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,

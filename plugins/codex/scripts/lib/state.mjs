@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { isPidAlive } from "./process.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
@@ -147,8 +148,76 @@ export function upsertJob(cwd, jobPatch) {
   });
 }
 
-export function listJobs(cwd) {
-  return loadState(cwd).jobs;
+// A job is reconcilable only when it claims to be active under a recorded
+// worker pid. A `running` job with NO pid is a just-spawned race (the worker
+// has not yet written `pid`) and is deliberately left alone. A `queued` job is
+// reconciled only when a pid is already recorded (the detached worker was
+// spawned but is now dead). pid <= 0 / non-finite is never treated as a real
+// pid by isPidAlive, so such records are also left untouched.
+function jobHasDeadWorker(job, killImpl) {
+  if (!job || (job.status !== "running" && job.status !== "queued")) {
+    return false;
+  }
+  const pid = job.pid;
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  return !isPidAlive(pid, killImpl);
+}
+
+function reconcileDeadJob(job) {
+  const note = `worker process died (pid ${job.pid} not alive); reconciled by liveness check`;
+  return {
+    ...job,
+    status: "failed",
+    phase: "failed",
+    pid: null,
+    error: note,
+    errorMessage: job.errorMessage ?? note,
+    completedAt: job.completedAt ?? nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+/**
+ * Read jobs and auto-reconcile any that claim to be running/queued under a dead
+ * worker pid. This is the central read seam: status, result, cancel, and the
+ * stop-gate task check all go through listJobs, so reconciling here means a job
+ * whose worker died (SIGKILL, crash, reboot) is treated as `failed` everywhere
+ * without waiting for /codex-plus:doctor.
+ *
+ * Reconciliation is best-effort: the in-memory view is always reconciled, and
+ * the persist is attempted but a persist failure is swallowed so a read can
+ * never throw.
+ *
+ * @param {string} cwd
+ * @param {{ killImpl?: (pid: number, signal: number) => void, persistImpl?: (cwd: string, state: object) => void }} [options]
+ */
+export function listJobs(cwd, options = {}) {
+  const killImpl = options.killImpl;
+  const persistImpl = options.persistImpl ?? saveState;
+  const state = loadState(cwd);
+  const jobs = state.jobs;
+
+  let changed = false;
+  const reconciled = jobs.map((job) => {
+    if (jobHasDeadWorker(job, killImpl)) {
+      changed = true;
+      return reconcileDeadJob(job);
+    }
+    return job;
+  });
+
+  if (changed) {
+    try {
+      persistImpl(cwd, { ...state, jobs: reconciled });
+    } catch {
+      // Best-effort: a persist failure (full disk, race) must never break the
+      // read. The returned view is still reconciled.
+    }
+  }
+
+  return reconciled;
 }
 
 export function setConfig(cwd, key, value) {

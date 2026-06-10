@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { readStdinIfPiped } from "./lib/fs.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
@@ -19,8 +20,10 @@ import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 
-function readHookInput() {
-  const raw = fs.readFileSync(0, "utf8").trim();
+async function readHookInput() {
+  // Non-blocking-safe stdin read so a never-closing stdin or EAGAIN under
+  // concurrent sessions can never hang the hook (#7).
+  const raw = (await readStdinIfPiped()).trim();
   if (!raw) {
     return {};
   }
@@ -112,7 +115,7 @@ async function handleSessionEnd(input) {
 }
 
 async function main() {
-  const input = readHookInput();
+  const input = await readHookInput();
   const eventName = process.argv[2] ?? input.hook_event_name ?? "";
 
   if (eventName === "SessionStart") {

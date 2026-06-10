@@ -8,7 +8,11 @@ import {
   loadBrokerSession,
   teardownBrokerSession
 } from "./broker-lifecycle.mjs";
-import { terminateProcessTree } from "./process.mjs";
+import { isPidAlive, terminateProcessTree } from "./process.mjs";
+
+// Re-exported so existing doctor consumers keep a single import surface; the
+// canonical implementation lives in process.mjs (the one source of truth).
+export { isPidAlive };
 import { listJobs, resolveStateDir } from "./state.mjs";
 import { deriveActiveJobIds, jobIdFromArtifact, walkStateDir } from "./doctor-fs.mjs";
 
@@ -38,36 +42,6 @@ function resolveTelemetryPathReadOnly(cwd) {
  */
 
 const ACTIVE_JOB_STATUSES = new Set(["running", "queued"]);
-
-/**
- * Is a pid currently alive? Probe with signal 0; ESRCH means it is gone. Any
- * other error (e.g. EPERM) is treated as "alive" since the process exists.
- *
- * Hardening: require pid > 0. `kill(0, …)` targets the CALLER's own process
- * group and `kill(-0, …)` is likewise group-relative — both are dangerous and
- * meaningless as a liveness probe. A real broker pid is always > 0, so requiring
- * it makes signalling pid 0 / -0 structurally impossible without affecting any
- * real broker.
- *
- * @param {number | null | undefined} pid
- * @param {(pid: number, signal: number) => void} killImpl
- * @returns {boolean}
- */
-function isPidAlive(pid, killImpl) {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    killImpl(pid, 0);
-    return true;
-  } catch (error) {
-    if (error && error.code === "ESRCH") {
-      return false;
-    }
-    // EPERM (or anything non-ESRCH): the process exists, we just cannot signal it.
-    return true;
-  }
-}
 
 /**
  * Triage the broker session into one of four states.
