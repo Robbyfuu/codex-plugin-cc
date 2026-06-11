@@ -105,7 +105,7 @@ export function createNotificationRouter(boundGeneration, ctx) {
  *   2. reset the slot and stop the idle guard (no recovery loop),
  *   3. invoke `onUnrecoverable()` so the broker fails fast (process.exit), which
  *      lets broker-lifecycle.ensureBrokerSession lazily respawn a FRESH broker +
- *      child on the next /codex-plus:* call (its endpoint probe detects the dead
+ *      child on the next /peer:* call (its endpoint probe detects the dead
  *      socket and spawns anew).
  *
  * Returns `{ recovered: true }` on success or `{ recovered: false, error }` on
@@ -113,7 +113,7 @@ export function createNotificationRouter(boundGeneration, ctx) {
  * assert the outcome.
  *
  * `recordEvent` is an optional best-effort telemetry seam: the broker passes a
- * sink that appends to its own broker-telemetry.jsonl file, so `/codex-plus:stats`
+ * sink that appends to its own broker-telemetry.jsonl file, so `/peer:stats`
  * can report REAL restart counts. It is invoked with `recovery-started` before
  * the swap and either `recovery-succeeded` or `recovery-failed` after, never
  * throwing into the recovery sequence (broker-routing stays pure/testable; the

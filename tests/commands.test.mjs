@@ -64,7 +64,7 @@ test("adversarial review command uses AskUserQuestion and background Bash while 
   assert.match(source, /Claude Code's `Bash\(..., run_in_background: true\)` is what actually detaches the run/i);
   assert.match(source, /When in doubt, run the review/i);
   assert.match(source, /\(Recommended\)/);
-  assert.match(source, /uses the same review target selection as `\/codex-plus:review`/i);
+  assert.match(source, /uses the same review target selection as `\/peer:review`/i);
   assert.match(source, /supports working-tree review, branch review, and `--base <ref>`/i);
   assert.match(source, /does not support `--scope staged` or `--scope unstaged`/i);
   assert.match(source, /can still take extra focus text after the flags/i);
@@ -86,7 +86,7 @@ test("continue is not exposed as a user-facing command", () => {
     "watch.md"
   ]);
   // The guard that matters for this test: `continue` is never exposed as a
-  // user-facing command (its semantics live inside `/codex-plus:rescue`).
+  // user-facing command (its semantics live inside `/peer:rescue`).
   assert.equal(commandFiles.includes("continue.md"), false);
 });
 
@@ -98,14 +98,14 @@ test("rescue command absorbs continue semantics", () => {
 
   assert.match(rescue, /The final user-visible response must be Codex's output verbatim/i);
   assert.match(rescue, /allowed-tools:\s*Bash\(node:\*\),\s*AskUserQuestion,\s*Agent/);
-  // Regression for #234: `Skill(codex-plus:rescue)` from the main agent recursed
+  // Regression for #234: `Skill(peer:rescue)` from the main agent recursed
   // because rescue.md named the routing with ambiguous prose ("Route this
-  // request to the `codex-plus:codex-rescue` subagent") while running under
+  // request to the `peer:codex-rescue` subagent") while running under
   // `context: fork` — forked general-purpose subagents do not expose the
   // `Agent` tool, so the fork fell back to `Skill` and re-entered this
   // command. Pin the explicit transport and the inline (no-fork) execution.
-  assert.match(rescue, /subagent_type: "codex-plus:codex-rescue"/);
-  assert.match(rescue, /do not call `Skill\(codex-plus:codex-rescue\)`/i);
+  assert.match(rescue, /subagent_type: "peer:codex-rescue"/);
+  assert.match(rescue, /do not call `Skill\(peer:codex-rescue\)`/i);
   assert.doesNotMatch(rescue, /^context:\s*fork\b/m);
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
@@ -115,7 +115,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /AskUserQuestion/);
   assert.match(rescue, /Continue current Codex thread/);
   assert.match(rescue, /Start a new Codex thread/);
-  assert.match(rescue, /run the `codex-plus:codex-rescue` subagent in the background/i);
+  assert.match(rescue, /run the `peer:codex-rescue` subagent in the background/i);
   assert.match(rescue, /default to foreground/i);
   assert.match(rescue, /Do not forward them to `task`/i);
   assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
@@ -159,20 +159,20 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Codex cannot be invoked, return nothing/i);
-  assert.match(readme, /`codex-plus:codex-rescue` subagent/i);
+  assert.match(readme, /`peer:codex-rescue` subagent/i);
   assert.match(readme, /if you do not pass `--model` or `--effort`, Codex chooses its own defaults/i);
   assert.match(readme, /--model gpt-5\.4-mini --effort medium/i);
   assert.match(readme, /`spark`, the plugin maps that to `gpt-5\.3-codex-spark`/i);
   assert.match(readme, /continue a previous Codex task/i);
-  assert.match(readme, /### `\/codex-plus:setup`/);
-  assert.match(readme, /### `\/codex-plus:review`/);
-  assert.match(readme, /### `\/codex-plus:adversarial-review`/);
-  assert.match(readme, /uses the same review target selection as `\/codex-plus:review`/i);
+  assert.match(readme, /### `\/peer:setup`/);
+  assert.match(readme, /### `\/peer:review`/);
+  assert.match(readme, /### `\/peer:adversarial-review`/);
+  assert.match(readme, /uses the same review target selection as `\/peer:review`/i);
   assert.match(readme, /--base main challenge whether this was the right caching and retry design/);
-  assert.match(readme, /### `\/codex-plus:rescue`/);
-  assert.match(readme, /### `\/codex-plus:status`/);
-  assert.match(readme, /### `\/codex-plus:result`/);
-  assert.match(readme, /### `\/codex-plus:cancel`/);
+  assert.match(readme, /### `\/peer:rescue`/);
+  assert.match(readme, /### `\/peer:status`/);
+  assert.match(readme, /### `\/peer:result`/);
+  assert.match(readme, /### `\/peer:cancel`/);
 });
 
 test("rescue path forwards --resume-id end-to-end so the stall hint is real", () => {
@@ -180,7 +180,7 @@ test("rescue path forwards --resume-id end-to-end so the stall hint is real", ()
   const agent = read("agents/codex-rescue.md");
   const runtimeSkill = read("skills/codex-cli-runtime/SKILL.md");
 
-  // The stall-error hint points users at `/codex-plus:rescue --resume-id <job-id>`,
+  // The stall-error hint points users at `/peer:rescue --resume-id <job-id>`,
   // so every layer of that path must actually forward the flag to `task`.
   assert.match(rescue, /--resume\|--fresh\|--resume-id <job-id>/, "the rescue argument-hint advertises --resume-id");
   assert.match(rescue, /Forward `--resume-id <job-id>` unchanged to `task`/i);
@@ -252,6 +252,6 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(setup, /codex-companion\.mjs" setup --json \$ARGUMENTS/);
   assert.match(readme, /!codex login/);
   assert.match(readme, /offer to install Codex for you/i);
-  assert.match(readme, /\/codex-plus:setup --enable-review-gate/);
-  assert.match(readme, /\/codex-plus:setup --disable-review-gate/);
+  assert.match(readme, /\/peer:setup --enable-review-gate/);
+  assert.match(readme, /\/peer:setup --disable-review-gate/);
 });

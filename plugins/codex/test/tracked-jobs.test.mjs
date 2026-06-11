@@ -330,7 +330,7 @@ test("flushJobToFailed persists a running job as failed with the supplied note",
 
 test("flushJobToFailed does NOT overwrite a job already in a terminal status (cancel race, #cancel-race)", async () => {
   await withTempWorkspace(({ workspaceRoot }) => {
-    // The cancel race: /codex-plus:cancel writes `cancelled` while the parent
+    // The cancel race: /peer:cancel writes `cancelled` while the parent
     // SIGTERMs the worker tree; the worker's termination handler then races a
     // `failed` flush over the SAME unlocked job. A user-cancelled job must never
     // be clobbered into `failed`.

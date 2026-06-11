@@ -117,7 +117,7 @@ function formatTrackedResumeHint(status, threadId, jobId) {
   if (!threadId || !jobId || !RESUMABLE_TERMINAL_STATUSES.has(status)) {
     return null;
   }
-  return `/codex-plus:rescue --resume-id ${jobId}`;
+  return `/peer:rescue --resume-id ${jobId}`;
 }
 
 function appendActiveJobsTable(lines, jobs) {
@@ -125,9 +125,9 @@ function appendActiveJobsTable(lines, jobs) {
   lines.push("| Job | Kind | Status | Phase | Elapsed | Codex Session ID | Summary | Actions |");
   lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const job of jobs) {
-    const actions = [`/codex-plus:status ${job.id}`];
+    const actions = [`/peer:status ${job.id}`];
     if (job.status === "queued" || job.status === "running") {
-      actions.push(`/codex-plus:cancel ${job.id}`);
+      actions.push(`/peer:cancel ${job.id}`);
     }
     lines.push(
       `| ${escapeMarkdownCell(job.id)} | ${escapeMarkdownCell(job.kindLabel)} | ${escapeMarkdownCell(job.status)} | ${escapeMarkdownCell(job.phase ?? "")} | ${escapeMarkdownCell(job.elapsed ?? "")} | ${escapeMarkdownCell(job.threadId ?? "")} | ${escapeMarkdownCell(job.summary ?? "")} | ${actions.map((action) => `\`${action}\``).join("<br>")} |`
@@ -168,18 +168,18 @@ function pushJobDetails(lines, job, options = {}) {
     lines.push(`  Live log: ${liveLogPath}`);
     if (job.status === "queued" || job.status === "running") {
       lines.push(`  Tail: tail -F ${liveLogPath}`);
-      lines.push(`  Watch pane: /codex-plus:watch ${job.id}`);
+      lines.push(`  Watch pane: /peer:watch ${job.id}`);
     }
   }
   if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
-    lines.push(`  Cancel: /codex-plus:cancel ${job.id}`);
+    lines.push(`  Cancel: /peer:cancel ${job.id}`);
   }
   if (job.status !== "queued" && job.status !== "running" && options.showResultHint) {
-    lines.push(`  Result: /codex-plus:result ${job.id}`);
+    lines.push(`  Result: /peer:result ${job.id}`);
   }
   if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
-    lines.push("  Review changes: /codex-plus:review --wait");
-    lines.push("  Stricter review: /codex-plus:adversarial-review --wait");
+    lines.push("  Review changes: /peer:review --wait");
+    lines.push("  Stricter review: /peer:adversarial-review --wait");
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");
@@ -642,7 +642,7 @@ export function renderCancelReport(job) {
   if (job.summary) {
     lines.push(`- Summary: ${job.summary}`);
   }
-  lines.push("- Check `/codex-plus:status` for the updated queue.");
+  lines.push("- Check `/peer:status` for the updated queue.");
 
   return `${lines.join("\n").trimEnd()}\n`;
 }

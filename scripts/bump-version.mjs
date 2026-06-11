@@ -62,7 +62,7 @@ const TARGETS = [
         }
       },
       {
-        label: "plugins[codex-plus].version",
+        label: "plugins[peer].version",
         get: (json) => findMarketplacePlugin(json).version,
         set: (json, version) => {
           findMarketplacePlugin(json).version = version;
@@ -132,8 +132,8 @@ function requireObject(value, label) {
 }
 
 function findMarketplacePlugin(json) {
-  const plugin = json.plugins?.find((entry) => entry?.name === "codex-plus");
-  requireObject(plugin, ".claude-plugin/marketplace.json plugins[codex-plus]");
+  const plugin = json.plugins?.find((entry) => entry?.name === "peer");
+  requireObject(plugin, ".claude-plugin/marketplace.json plugins[peer]");
   return plugin;
 }
 

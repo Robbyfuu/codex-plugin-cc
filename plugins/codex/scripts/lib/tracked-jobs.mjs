@@ -119,7 +119,7 @@ const FLUSHABLE_STATUSES = new Set(["running", "queued"]);
  * strand its job as `running`. Mirrors runTrackedJob's catch-branch shape
  * (status/phase/pid/completedAt) so the record looks like any other failure.
  *
- * Cancel-race guard: on `/codex-plus:cancel`, the parent writes `cancelled`
+ * Cancel-race guard: on `/peer:cancel`, the parent writes `cancelled`
  * while it SIGTERMs the worker tree, racing this handler over the SAME unlocked
  * job. So this re-reads the current job status and flushes ONLY when it is still
  * `running`/`queued`; a terminal status (`cancelled`/`completed`/`failed`) is
@@ -453,7 +453,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     // (e.g. an aborted turn) land here too. None of these reach the catch block
     // below. We split by exitStatus: a clean 0 is "completed"; any non-zero
     // resolve is "interrupted" — its own VISIBLE bucket (named for the dominant
-    // cause) so /codex-plus:stats surfaces this churn instead of hiding it inside
+    // cause) so /peer:stats surfaces this churn instead of hiding it inside
     // "completed".
     const settledReason = execution.exitStatus === 0 ? "completed" : "interrupted";
     emitOutcome(buildOutcome(settledReason, execution.threadId));

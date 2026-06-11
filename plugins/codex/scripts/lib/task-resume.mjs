@@ -53,7 +53,7 @@ export function prepareTaskResume(workspaceRoot, reference, overrides = {}, seam
 
   const source = resolveSourceJob(workspaceRoot, reference, { readStoredJob, listJobs });
   if (!source) {
-    throw new Error(`No Codex job found for "${reference}". Run /codex-plus:status to list jobs.`);
+    throw new Error(`No Codex job found for "${reference}". Run /peer:status to list jobs.`);
   }
 
   if (ACTIVE_STATUSES.has(source.status)) {
@@ -64,7 +64,7 @@ export function prepareTaskResume(workspaceRoot, reference, overrides = {}, seam
 
   if (!source.threadId) {
     throw new Error(
-      `Job ${source.id} has no Codex thread to resume (its threadId was never recorded). Start a fresh /codex-plus:task instead.`
+      `Job ${source.id} has no Codex thread to resume (its threadId was never recorded). Start a fresh /peer:task instead.`
     );
   }
 

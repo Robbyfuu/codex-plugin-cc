@@ -15,7 +15,7 @@ const RECONCILED_FAILED_JOB = {
   error: "worker process died (pid 999999 not alive); reconciled by liveness check"
 };
 
-const TRACKED_RESUME_HINT = /Resume here:\s*\/codex-plus:rescue --resume-id task-dead/;
+const TRACKED_RESUME_HINT = /Resume here:\s*\/peer:rescue --resume-id task-dead/;
 
 test("renderJobStatusReport shows the resumedFrom link for a resumed task", () => {
   const output = renderJobStatusReport({

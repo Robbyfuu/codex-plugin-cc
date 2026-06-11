@@ -75,11 +75,11 @@ test("captureTurn idle-stall message tells the user how to resume the surviving 
 
   await assert.rejects(pending, (error) => {
     assert.ok(error instanceof CodexStallError);
-    // The hint must name the REAL user-facing slash command. `/codex-plus:task`
+    // The hint must name the REAL user-facing slash command. `/peer:task`
     // does not exist (task is an internal companion subcommand); the user path is
-    // `/codex-plus:rescue --resume-id <job-id>`.
-    assert.match(error.message, /rescue --resume-id/, "the idle-stall message names the real /codex-plus:rescue command");
-    assert.doesNotMatch(error.message, /codex-plus:task --resume-id/, "must not point at the nonexistent /codex-plus:task command");
+    // `/peer:rescue --resume-id <job-id>`.
+    assert.match(error.message, /rescue --resume-id/, "the idle-stall message names the real /peer:rescue command");
+    assert.doesNotMatch(error.message, /peer:task --resume-id/, "must not point at the nonexistent /peer:task command");
     return true;
   });
 });
@@ -96,8 +96,8 @@ test("captureTurn hard-stop message tells the user how to resume the surviving t
   await assert.rejects(pending, (error) => {
     assert.ok(error instanceof CodexStallError);
     assert.equal(error.reason, "max-duration");
-    assert.match(error.message, /rescue --resume-id/, "the hard-stop message names the real /codex-plus:rescue command");
-    assert.doesNotMatch(error.message, /codex-plus:task --resume-id/, "must not point at the nonexistent /codex-plus:task command");
+    assert.match(error.message, /rescue --resume-id/, "the hard-stop message names the real /peer:rescue command");
+    assert.doesNotMatch(error.message, /peer:task --resume-id/, "must not point at the nonexistent /peer:task command");
     return true;
   });
 });

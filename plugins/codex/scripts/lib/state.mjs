@@ -188,7 +188,7 @@ function reconcileDeadJob(job) {
  * worker pid. This is the central read seam: status, result, cancel, and the
  * stop-gate task check all go through listJobs, so reconciling here means a job
  * whose worker died (SIGKILL, crash, reboot) is treated as `failed` everywhere
- * without waiting for /codex-plus:doctor.
+ * without waiting for /peer:doctor.
  *
  * Reconciliation is best-effort: the in-memory view is always reconciled, and
  * the persist is attempted but a persist failure is swallowed so a read can

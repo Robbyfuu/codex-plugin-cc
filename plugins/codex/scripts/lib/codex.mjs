@@ -595,7 +595,7 @@ export async function captureTurn(client, threadId, startRequest, options = {}) 
         `Codex turn stalled: no activity for ${timeouts.idleMs}ms; ` +
           `raise ${IDLE_TIMEOUT_ENV} to allow longer idle gaps.\n` +
           `The thread survives server-side — resume it with ` +
-          `\`/codex-plus:rescue --resume-id <job-id>\` (find the job id with \`/codex-plus:status\`).`,
+          `\`/peer:rescue --resume-id <job-id>\` (find the job id with \`/peer:status\`).`,
         { idleMs: timeouts.idleMs, reason: "idle" }
       );
       emitProgress(state.onProgress, error.message, "failed");
@@ -607,7 +607,7 @@ export async function captureTurn(client, threadId, startRequest, options = {}) 
         `Codex turn exceeded the maximum duration of ${timeouts.maxTurnMs}ms ` +
           `(${MAX_TURN_ENV}=${timeouts.maxTurnMs}ms); raise ${MAX_TURN_ENV} to allow longer turns.\n` +
           `The thread survives server-side — resume it with ` +
-          `\`/codex-plus:rescue --resume-id <job-id>\` (find the job id with \`/codex-plus:status\`).`,
+          `\`/peer:rescue --resume-id <job-id>\` (find the job id with \`/peer:status\`).`,
         { idleMs: timeouts.idleMs, reason: "max-duration" }
       );
       emitProgress(state.onProgress, error.message, "failed");
@@ -1001,7 +1001,7 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
 export async function runAppServerReview(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex-plus:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/peer:setup`.");
   }
 
   return withAppServer(cwd, async (client) => {
@@ -1057,7 +1057,7 @@ export async function runAppServerReview(cwd, options = {}) {
 export async function runAppServerTurn(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex-plus:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/peer:setup`.");
   }
 
   return withAppServer(cwd, async (client) => {
@@ -1124,7 +1124,7 @@ export async function runAppServerTurn(cwd, options = {}) {
 export async function findLatestTaskThread(cwd) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex-plus:setup`.");
+    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/peer:setup`.");
   }
 
   return withAppServer(cwd, async (client) => {

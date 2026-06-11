@@ -13,7 +13,7 @@ import { appendTelemetryLine } from "./telemetry.mjs";
  * This is the first companion-side source for REAL broker restart counts: the
  * broker self-heal (generation bump + child swap) is otherwise invisible to the
  * companion, which until now could only INFER restarts from the `interrupted`
- * turn bucket. With these events `/codex-plus:stats` can report actual broker
+ * turn bucket. With these events `/peer:stats` can report actual broker
  * churn (recovery-succeeded / recovery-failed) instead of an inference.
  *
  * Record shape: `{ at, event }` where event is one of

@@ -1,7 +1,7 @@
 /**
- * Per-turn history for `/codex-plus:history`. A focused, newest-first list of the
+ * Per-turn history for `/peer:history`. A focused, newest-first list of the
  * turns recorded in the telemetry file (turns ONLY — broker events are out of
- * scope here; they belong to `/codex-plus:stats`). It reuses the same telemetry
+ * scope here; they belong to `/peer:stats`). It reuses the same telemetry
  * records that stats aggregates, but projects them per-turn rather than
  * summarizing.
  */

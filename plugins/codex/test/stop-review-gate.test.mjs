@@ -86,7 +86,7 @@ test("an ALLOW verdict approves with no warning", () => {
 test("a spawn-error infra failure approves with a stderr warning and manual instructions", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "spawn", reason: "spawn failed: ENOENT" });
   assert.notEqual(outcome.decision, "block", "an infra failure must NOT block");
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
   assert.match(outcome.warning, /spawn failed/i);
 });
 
@@ -94,32 +94,32 @@ test("a timeout infra failure approves with a warning", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "timeout" });
   assert.notEqual(outcome.decision, "block");
   assert.match(outcome.warning, /timed out/i);
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
 });
 
 test("a non-zero-exit infra failure approves with a warning", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "exit", reason: "exit 1: boom" });
   assert.notEqual(outcome.decision, "block");
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
 });
 
 test("an empty-output infra failure approves with a warning", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "empty" });
   assert.notEqual(outcome.decision, "block");
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
 });
 
 test("an invalid-JSON infra failure approves with a warning", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "parse" });
   assert.notEqual(outcome.decision, "block");
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
 });
 
 test("a rate-limit infra failure approves with a rate-limit-specific warning", () => {
   const outcome = buildStopGateOutcome({ verdict: "infra-error", kind: "rate-limit", reason: "429 rate limit exceeded" });
   assert.notEqual(outcome.decision, "block");
   assert.match(outcome.warning, /rate limit/i);
-  assert.match(outcome.warning, /codex-plus:review --wait/i);
+  assert.match(outcome.warning, /peer:review --wait/i);
 });
 
 // ---------------------------------------------------------------------------

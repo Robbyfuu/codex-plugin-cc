@@ -65,10 +65,10 @@ function buildSetupNote(cwd) {
   }
 
   const detail = availability.detail ? ` ${availability.detail}.` : "";
-  return `Codex is not set up for the review gate.${detail} Run /codex-plus:setup.`;
+  return `Codex is not set up for the review gate.${detail} Run /peer:setup.`;
 }
 
-const MANUAL_REVIEW_HINT = "Run /codex-plus:review --wait manually, or end the session and review later.";
+const MANUAL_REVIEW_HINT = "Run /peer:review --wait manually, or end the session and review later.";
 
 /**
  * Does the text look like an upstream rate-limit / quota error? Matches HTTP
@@ -237,7 +237,7 @@ async function main() {
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
   const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
   const runningTaskNote = runningJob
-    ? `Codex task ${runningJob.id} is still running. Check /codex-plus:status and use /codex-plus:cancel ${runningJob.id} if you want to stop it before ending the session.`
+    ? `Codex task ${runningJob.id} is still running. Check /peer:status and use /peer:cancel ${runningJob.id} if you want to stop it before ending the session.`
     : null;
 
   if (!config.stopReviewGate) {
