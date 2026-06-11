@@ -106,6 +106,20 @@ function formatCodexResumeCommand(job) {
   return `codex resume ${job.threadId}`;
 }
 
+// A terminal job killed mid-turn (timeout, idle stall, or a liveness-reconciled
+// dead worker -> `failed`/`interrupted`) keeps a surviving server-side thread, so
+// it is resumable through our tracked-job path. `completed` has nothing to resume
+// and `cancelled` was a deliberate stop, so neither qualifies. Wording mirrors the
+// stall hint in codex.mjs so the two stay consistent.
+const RESUMABLE_TERMINAL_STATUSES = new Set(["failed", "interrupted"]);
+
+function formatTrackedResumeHint(status, threadId, jobId) {
+  if (!threadId || !jobId || !RESUMABLE_TERMINAL_STATUSES.has(status)) {
+    return null;
+  }
+  return `/codex-plus:rescue --resume-id ${jobId}`;
+}
+
 function appendActiveJobsTable(lines, jobs) {
   lines.push("Active jobs:");
   lines.push("| Job | Kind | Status | Phase | Elapsed | Codex Session ID | Summary | Actions |");
@@ -140,6 +154,10 @@ function pushJobDetails(lines, job, options = {}) {
   }
   if (job.threadId) {
     lines.push(`  Codex session ID: ${job.threadId}`);
+  }
+  const trackedResumeHint = formatTrackedResumeHint(job.status, job.threadId, job.id);
+  if (trackedResumeHint) {
+    lines.push(`  Resume here: ${trackedResumeHint}`);
   }
   const resumeCommand = formatCodexResumeCommand(job);
   if (resumeCommand) {
@@ -537,6 +555,7 @@ export function renderJobStatusReport(job) {
 export function renderStoredJobResult(job, storedJob) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
   const resumeCommand = threadId ? `codex resume ${threadId}` : null;
+  const trackedResumeHint = formatTrackedResumeHint(job?.status, threadId, job?.id);
   const resumedFrom = storedJob?.resumedFrom ?? job?.resumedFrom ?? null;
   // Footer appended to every output variant below: the Codex session id + resume
   // hint when a thread exists, and the resumedFrom link when this job continued
@@ -548,6 +567,9 @@ export function renderStoredJobResult(job, storedJob) {
     }
     if (threadId) {
       footerLines.push(`Codex session ID: ${threadId}`);
+      if (trackedResumeHint) {
+        footerLines.push(`Resume here: ${trackedResumeHint}`);
+      }
       footerLines.push(`Resume in Codex: ${resumeCommand}`);
     }
     return footerLines.length > 0 ? `\n${footerLines.join("\n")}\n` : "";
@@ -585,6 +607,9 @@ export function renderStoredJobResult(job, storedJob) {
 
   if (threadId) {
     lines.push(`Codex session ID: ${threadId}`);
+    if (trackedResumeHint) {
+      lines.push(`Resume here: ${trackedResumeHint}`);
+    }
     lines.push(`Resume in Codex: ${resumeCommand}`);
   }
 
