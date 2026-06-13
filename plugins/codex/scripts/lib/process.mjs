@@ -87,13 +87,18 @@ function looksLikeMissingProcessMessage(text) {
 }
 
 export function terminateProcessTree(pid, options = {}) {
-  if (!Number.isFinite(pid)) {
-    return { attempted: false, delivered: false, method: null };
-  }
-
   const platform = options.platform ?? process.platform;
   const runCommandImpl = options.runCommandImpl ?? runCommand;
   const killImpl = options.killImpl ?? process.kill.bind(process);
+
+  // Gate the whole termination on liveness. isPidAlive already rejects
+  // non-finite pids, pid <= 0 (which would target the caller's OWN process
+  // group via kill(-0/-pid)), and ESRCH (a stale pid the OS may have reused).
+  // This single guard replaces the old finite-only check and prevents signaling
+  // an unrelated process group from a stale persisted job record.
+  if (!isPidAlive(pid, killImpl)) {
+    return { attempted: false, delivered: false, method: null };
+  }
 
   if (platform === "win32") {
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {

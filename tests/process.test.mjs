@@ -35,6 +35,10 @@ test("terminateProcessTree uses taskkill on Windows", () => {
 test("terminateProcessTree treats missing Windows processes as already stopped", () => {
   const outcome = terminateProcessTree(1234, {
     platform: "win32",
+    // Inject a live-pid probe so the liveness gate passes deterministically and
+    // the test reaches the taskkill branch it is asserting (never probe a real
+    // pid on the runner).
+    killImpl() {},
     runCommandImpl(command, args) {
       return {
         command,
@@ -52,4 +56,71 @@ test("terminateProcessTree treats missing Windows processes as already stopped",
   assert.equal(outcome.method, "taskkill");
   assert.equal(outcome.result.status, 128);
   assert.match(outcome.result.stdout, /not found/i);
+});
+
+test("terminateProcessTree no-ops on a stale (ESRCH) pid without signaling the group", () => {
+  const signals = [];
+  const outcome = terminateProcessTree(4321, {
+    platform: "linux",
+    killImpl(targetPid, signal) {
+      signals.push({ targetPid, signal });
+      // signal 0 is the liveness probe; report the pid as gone.
+      const error = new Error("no such process");
+      error.code = "ESRCH";
+      throw error;
+    }
+  });
+
+  assert.deepEqual(outcome, { attempted: false, delivered: false, method: null });
+  // Only the liveness probe (signal 0) ran; the group kill must never fire.
+  assert.deepEqual(signals, [{ targetPid: 4321, signal: 0 }]);
+  assert.equal(
+    signals.some((entry) => entry.signal === "SIGTERM"),
+    false
+  );
+});
+
+test("terminateProcessTree no-ops on pid 0 and never sends a signal", () => {
+  const signals = [];
+  const outcome = terminateProcessTree(0, {
+    platform: "linux",
+    killImpl(targetPid, signal) {
+      signals.push({ targetPid, signal });
+    }
+  });
+
+  assert.deepEqual(outcome, { attempted: false, delivered: false, method: null });
+  // pid <= 0 is rejected before any probe, so killImpl is never invoked.
+  assert.deepEqual(signals, []);
+});
+
+test("terminateProcessTree no-ops on a negative pid", () => {
+  const signals = [];
+  const outcome = terminateProcessTree(-5, {
+    platform: "linux",
+    killImpl(targetPid, signal) {
+      signals.push({ targetPid, signal });
+    }
+  });
+
+  assert.deepEqual(outcome, { attempted: false, delivered: false, method: null });
+  assert.deepEqual(signals, []);
+});
+
+test("terminateProcessTree reaches the group kill for a live pid", () => {
+  const signals = [];
+  const outcome = terminateProcessTree(4321, {
+    platform: "linux",
+    killImpl(targetPid, signal) {
+      signals.push({ targetPid, signal });
+      // signal 0 (liveness probe) succeeds; SIGTERM to the group succeeds too.
+    }
+  });
+
+  assert.deepEqual(outcome, { attempted: true, delivered: true, method: "process-group" });
+  // The liveness probe runs first, then the negative-pid group SIGTERM.
+  assert.deepEqual(signals, [
+    { targetPid: 4321, signal: 0 },
+    { targetPid: -4321, signal: "SIGTERM" }
+  ]);
 });
