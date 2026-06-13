@@ -697,10 +697,17 @@ export async function captureTurn(client, threadId, startRequest, options = {}) 
   }
 }
 
-async function withAppServer(cwd, fn) {
+// `options.env` is the active-account env (CODEX_HOME-injected by
+// resolveCodexEnv at the companion boundary). It MUST reach BOTH the broker
+// spawn (via connect -> ensureBrokerSession -> spawnBrokerProcess) AND the
+// direct app-server fallback (connect -> SpawnedCodexAppServerClient), so a
+// turn never runs under the wrong account. `connectImpl` is a test-only seam.
+async function withAppServer(cwd, fn, options = {}) {
+  const env = options.env;
+  const connectImpl = options.connectImpl ?? CodexAppServerClient.connect.bind(CodexAppServerClient);
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd);
+    client = await connectImpl(cwd, { env });
     const result = await fn(client);
     await client.close();
     return result;
@@ -719,7 +726,7 @@ async function withAppServer(cwd, fn) {
       throw error;
     }
 
-    const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+    const directClient = await connectImpl(cwd, { env, disableBroker: true });
     try {
       return await fn(directClient);
     } finally {
@@ -1051,7 +1058,7 @@ export async function runAppServerReview(cwd, options = {}) {
       error: turnState.error,
       stderr: cleanCodexStderr(client.stderr)
     };
-  });
+  }, { env: options.env, connectImpl: options.connectImpl });
 }
 
 export async function runAppServerTurn(cwd, options = {}) {
@@ -1118,10 +1125,10 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
-  });
+  }, { env: options.env, connectImpl: options.connectImpl });
 }
 
-export async function findLatestTaskThread(cwd) {
+export async function findLatestTaskThread(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
     throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/peer:setup`.");
@@ -1140,7 +1147,7 @@ export async function findLatestTaskThread(cwd) {
       response.data.find((thread) => typeof thread.name === "string" && thread.name.startsWith(TASK_THREAD_PREFIX)) ??
       null
     );
-  });
+  }, { env: options.env, connectImpl: options.connectImpl });
 }
 
 export function buildPersistentTaskThreadName(prompt) {

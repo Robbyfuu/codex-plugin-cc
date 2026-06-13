@@ -226,7 +226,10 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 
   async initialize() {
-    this.proc = spawn("codex", ["app-server"], {
+    // `spawnImpl` is a default-valued seam used only to make the spawned env
+    // observable in tests; production callers omit it and get the real spawn.
+    const spawnImpl = this.options.spawnImpl ?? spawn;
+    this.proc = spawnImpl("codex", ["app-server"], {
       cwd: this.cwd,
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],

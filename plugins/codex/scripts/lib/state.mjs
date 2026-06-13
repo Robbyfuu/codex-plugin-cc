@@ -32,6 +32,16 @@ function defaultState() {
   };
 }
 
+// The plugin data root is the parent of the per-workspace `state/` directory.
+// It is the home for GLOBAL (not per-workspace) plugin data such as the
+// multi-account registry (accounts.json). When CLAUDE_PLUGIN_DATA is set the
+// root is that directory; otherwise it falls back to the same temp-backed root
+// the per-workspace state uses, so global and per-workspace data stay colocated.
+export function resolvePluginDataRoot(env = process.env) {
+  const pluginDataDir = env?.[PLUGIN_DATA_ENV];
+  return pluginDataDir ? pluginDataDir : FALLBACK_STATE_ROOT_DIR;
+}
+
 export function resolveStateDir(cwd) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   let canonicalWorkspaceRoot = workspaceRoot;

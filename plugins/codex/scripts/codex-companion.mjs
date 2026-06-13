@@ -20,10 +20,22 @@ import {
     runAppServerReview,
     runAppServerTurn
   } from "./lib/codex.mjs";
+import {
+  addAccount,
+  listAccounts,
+  resolveCodexEnv,
+  useAccount
+} from "./lib/accounts.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
-import { loadBrokerSession, sendBrokerRecover } from "./lib/broker-lifecycle.mjs";
+import {
+  clearBrokerSession,
+  loadBrokerSession,
+  sendBrokerRecover,
+  sendBrokerShutdown,
+  teardownBrokerSession
+} from "./lib/broker-lifecycle.mjs";
 import { buildDoctorReport, planCleanup, executeCleanup } from "./lib/doctor.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
@@ -86,6 +98,15 @@ const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "hi
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
+// The active-account env, resolved ONCE per companion invocation (each command
+// is a fresh process). resolveCodexEnv is THE single injection point: when an
+// account is active it carries CODEX_HOME; with none active it is process.env
+// unchanged (byte-for-byte today's single-account behavior). Threaded into every
+// codex spawn path — the broker spawn and direct fallback (via runAppServer*),
+// getCodexAuthStatus, findLatestTaskThread, and the detached task worker — so no
+// turn ever runs under the wrong account.
+const codexEnv = resolveCodexEnv(process.env);
+
 function printUsage() {
   console.log(
     [
@@ -100,7 +121,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs doctor [--fix] [--clean] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/codex-companion.mjs watch [job-id] [--json]"
+      "  node scripts/codex-companion.mjs watch [job-id] [--json]",
+      "  node scripts/codex-companion.mjs account [add <name> [--home <path>] | use <name> | list] [--json]"
     ].join("\n")
   );
 }
@@ -201,7 +223,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
-  const authStatus = await getCodexAuthStatus(cwd);
+  const authStatus = await getCodexAuthStatus(cwd, { env: codexEnv });
   const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
@@ -375,7 +397,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
     return null;
   }
 
-  return findLatestTaskThread(workspaceRoot);
+  return findLatestTaskThread(workspaceRoot, { env: codexEnv });
 }
 
 async function executeReviewRun(request) {
@@ -393,7 +415,8 @@ async function executeReviewRun(request) {
     const result = await runAppServerReview(request.cwd, {
       target: reviewTarget,
       model: request.model,
-      onProgress: request.onProgress
+      onProgress: request.onProgress,
+      env: codexEnv
     });
     const payload = {
       review: reviewName,
@@ -436,7 +459,8 @@ async function executeReviewRun(request) {
     model: request.model,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA),
-    onProgress: request.onProgress
+    onProgress: request.onProgress,
+    env: codexEnv
   });
   const parsed = parseStructuredOutput(result.finalMessage, {
     status: result.status,
@@ -527,6 +551,7 @@ async function executeTaskRun(request) {
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT),
+    env: codexEnv,
     ...(isStopReviewTask ? { outputSchema: readOutputSchema(STOP_GATE_SCHEMA) } : {})
   });
 
@@ -686,7 +711,10 @@ function spawnDetachedTaskWorker(cwd, jobId) {
   const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
   const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
-    env: process.env,
+    // The detached worker is a fresh companion process; thread the resolved
+    // active-account env so its codex spawns inherit the SAME CODEX_HOME the
+    // enqueueing process saw, even if accounts.json changes before it starts.
+    env: codexEnv,
     detached: true,
     stdio: "ignore",
     windowsHide: true
@@ -1338,6 +1366,121 @@ async function handleCancel(argv) {
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
 
+// Force the current workspace's broker to respawn on the next turn so it picks
+// up the newly-active account's CODEX_HOME. A running broker holds the OLD env
+// (it spawned its codex child at launch), so we reuse the EXISTING SessionEnd
+// teardown path — shutdown + teardown + clear — WITHOUT touching the broker
+// protocol. ensureBrokerSession then transparently respawns on the next call.
+// Best-effort: a switch must succeed even if no broker is running.
+async function respawnBrokerForUse(cwd) {
+  const brokerSession =
+    loadBrokerSession(cwd) ??
+    (process.env[BROKER_ENDPOINT_ENV]
+      ? { endpoint: process.env[BROKER_ENDPOINT_ENV] }
+      : null);
+  if (!brokerSession) {
+    return false;
+  }
+  const endpoint = brokerSession.endpoint ?? null;
+  if (endpoint) {
+    await sendBrokerShutdown(endpoint);
+  }
+  teardownBrokerSession({
+    endpoint,
+    pidFile: brokerSession.pidFile ?? null,
+    logFile: brokerSession.logFile ?? null,
+    sessionDir: brokerSession.sessionDir ?? null,
+    pid: brokerSession.pid ?? null,
+    killProcess: terminateProcessTree
+  });
+  clearBrokerSession(cwd);
+  return true;
+}
+
+function renderAccountAdd(account, loginCommand) {
+  return [
+    `Registered account "${account.name}".`,
+    `  CODEX_HOME: ${account.home}`,
+    "",
+    "Run this ONCE to log this account in (opens the OpenAI OAuth flow in your browser):",
+    "",
+    `  ${loginCommand}`,
+    "",
+    `Then activate it with: /peer:account use ${account.name}`
+  ].join("\n");
+}
+
+function renderAccountList(rows) {
+  if (rows.length === 0) {
+    return "No accounts registered.";
+  }
+  const lines = ["Accounts:"];
+  for (const row of rows) {
+    const marker = row.active ? "*" : " ";
+    const login = row.loggedIn ? "logged in" : "not logged in";
+    lines.push(`  ${marker} ${row.name} — ${row.home} (${login})`);
+  }
+  lines.push("");
+  lines.push("* = active account. Switch with /peer:account use <name>.");
+  return lines.join("\n");
+}
+
+async function handleAccount(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["cwd", "home"],
+    booleanOptions: ["json"]
+  });
+  const subcommand = positionals[0];
+  const cwd = resolveCommandWorkspace(options);
+
+  if (subcommand === "add") {
+    const name = positionals[1];
+    const { account, loginCommand } = addAccount(name, { home: options.home });
+    const payload = { action: "add", account, loginCommand };
+    outputCommandResult(payload, renderAccountAdd(account, loginCommand), options.json);
+    return;
+  }
+
+  if (subcommand === "use") {
+    const name = positionals[1];
+    useAccount(name);
+    const respawned = await respawnBrokerForUse(cwd);
+    const payload = { action: "use", active: name, brokerRespawned: respawned };
+    const lines = [
+      `Active account is now "${name}".`,
+      respawned
+        ? "The shared Codex runtime for this workspace was stopped; the next review or task will start a fresh one under the new account."
+        : "No running Codex runtime to restart; the next review or task will start one under the new account."
+    ];
+    outputCommandResult(payload, lines.join("\n"), options.json);
+    return;
+  }
+
+  if (subcommand === "list" || subcommand === undefined) {
+    const accounts = listAccounts();
+    const rows = [];
+    for (const account of accounts) {
+      // Best-effort per-account login status under THAT account's CODEX_HOME.
+      // A failure (missing dir, codex not installed) shows "not logged in"
+      // rather than throwing, so list always renders.
+      let loggedIn = false;
+      try {
+        const status = await getCodexAuthStatus(cwd, {
+          env: { ...process.env, CODEX_HOME: account.home }
+        });
+        loggedIn = Boolean(status.loggedIn);
+      } catch {
+        loggedIn = false;
+      }
+      rows.push({ ...account, loggedIn });
+    }
+    outputCommandResult({ action: "list", accounts: rows }, renderAccountList(rows), options.json);
+    return;
+  }
+
+  throw new Error(`Unknown account subcommand "${subcommand}". Use: add <name> [--home <path>] | use <name> | list`);
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -1386,6 +1529,9 @@ async function main() {
       break;
     case "watch":
       await handleWatch(argv);
+      break;
+    case "account":
+      await handleAccount(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);
