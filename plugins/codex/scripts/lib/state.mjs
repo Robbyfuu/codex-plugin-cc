@@ -58,7 +58,17 @@ export function resolveJobsDir(cwd) {
 }
 
 export function ensureStateDir(cwd) {
-  fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
+  // Create the jobs dir (and its state-dir parent) restrictively. State may hold
+  // job records with prompt text and telemetry; on a multi-user host where the
+  // fallback root lives under os.tmpdir() this keeps it owner-only. recursive
+  // mkdir does not re-chmod an existing dir, so chmod the resolved state dir too.
+  // Best-effort: a chmod failure must never break state writes.
+  fs.mkdirSync(resolveJobsDir(cwd), { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(resolveStateDir(cwd), 0o700);
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function loadState(cwd) {

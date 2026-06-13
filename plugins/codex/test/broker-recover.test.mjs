@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import * as brokerLifecycle from "../scripts/lib/broker-lifecycle.mjs";
 import { isBrokerEndpointReady, sendBrokerRecover } from "../scripts/lib/broker-lifecycle.mjs";
+import { secureUnixSocket } from "../scripts/app-server-broker.mjs";
 
 test("broker-lifecycle exports isBrokerEndpointReady for doctor reuse", () => {
   assert.equal(typeof brokerLifecycle.isBrokerEndpointReady, "function");
@@ -117,4 +118,48 @@ test("sendBrokerRecover returns recovered:false when nothing is listening", asyn
   const result = await sendBrokerRecover(`unix:${socketPath}`, { timeoutMs: 200 });
   assert.equal(result.recovered, false);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("secureUnixSocket chmods the socket to 0700 on POSIX", () => {
+  const calls = [];
+  const applied = secureUnixSocket("/tmp/broker.sock", "linux", (socketPath, mode) => {
+    calls.push({ socketPath, mode });
+  });
+
+  assert.equal(applied, true);
+  assert.deepEqual(calls, [{ socketPath: "/tmp/broker.sock", mode: 0o700 }]);
+});
+
+test("secureUnixSocket no-ops on Windows named pipes", () => {
+  let called = false;
+  const applied = secureUnixSocket("\\\\.\\pipe\\broker", "win32", () => {
+    called = true;
+  });
+
+  assert.equal(applied, false);
+  assert.equal(called, false);
+});
+
+test("secureUnixSocket is best-effort and swallows chmod failures", () => {
+  const applied = secureUnixSocket("/tmp/broker.sock", "linux", () => {
+    const error = new Error("permission denied");
+    error.code = "EPERM";
+    throw error;
+  });
+
+  assert.equal(applied, false);
+});
+
+test("secureUnixSocket actually tightens a real bound socket to 0700 on POSIX", { skip: process.platform === "win32" ? "POSIX-only mode bits" : false }, async () => {
+  const { dir, socketPath } = makeSocketPath();
+  const server = await startServer(socketPath, () => {});
+
+  try {
+    const applied = secureUnixSocket(socketPath);
+    assert.equal(applied, true);
+    assert.equal(fs.statSync(socketPath).mode & 0o777, 0o700);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
+import { ensureStateDir, resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   // This test asserts the FALLBACK state root (under os.tmpdir()), which only
@@ -45,6 +45,27 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
       stateDir,
       new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
     );
+  } finally {
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
+});
+
+test("ensureStateDir creates the state dir with owner-only (0700) mode", { skip: process.platform === "win32" ? "POSIX-only mode bits" : false }, () => {
+  // Use an explicit CLAUDE_PLUGIN_DATA root so the assertion is deterministic
+  // regardless of the runner's umask on the shared os.tmpdir() fallback.
+  const workspace = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+
+  try {
+    ensureStateDir(workspace);
+    const stateDir = resolveStateDir(workspace);
+    assert.equal(fs.statSync(stateDir).mode & 0o777, 0o700);
   } finally {
     if (previousPluginDataDir == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;

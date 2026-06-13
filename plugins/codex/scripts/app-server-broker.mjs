@@ -4,6 +4,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { parseArgs } from "./lib/args.mjs";
 import { BROKER_BUSY_RPC_CODE, CodexAppServerClient } from "./lib/app-server.mjs";
@@ -28,6 +29,30 @@ function buildStreamThreadIds(method, params, result) {
 
 function buildJsonRpcError(code, message, data) {
   return data === undefined ? { code, message } : { code, message, data };
+}
+
+/**
+ * Tighten the broker's unix socket to owner-only (0700) after it is bound. The
+ * socket would otherwise inherit the process umask, leaving its only access
+ * barrier the 0700 mkdtemp parent dir. chmod is POSIX-only: on Windows the
+ * transport is a named pipe (no path to chmod), so this no-ops there. Wrapped
+ * best-effort — a chmod failure must never crash the broker.
+ *
+ * @param {string | null | undefined} socketPath
+ * @param {NodeJS.Platform} [platform]
+ * @param {(path: string, mode: number) => void} [chmodImpl]
+ * @returns {boolean} whether a chmod was applied
+ */
+export function secureUnixSocket(socketPath, platform = process.platform, chmodImpl = fs.chmodSync) {
+  if (platform === "win32" || !socketPath) {
+    return false;
+  }
+  try {
+    chmodImpl(socketPath, 0o700);
+    return true;
+  } catch {
+    return false; // best-effort
+  }
 }
 
 function send(socket, message) {
@@ -472,9 +497,17 @@ async function main() {
   });
 
   server.listen(listenTarget.path);
+  server.on("listening", () => {
+    secureUnixSocket(listenTarget.path, process.platform);
+  });
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+// Only run the broker when invoked as a script. Importing the module (for unit
+// tests of exported helpers like secureUnixSocket) must NOT start the server.
+const isEntrypoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isEntrypoint) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
