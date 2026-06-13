@@ -216,6 +216,17 @@ function structuredReviewPayload(prompt) {
   });
 }
 
+function structuredStopGatePayload() {
+  // The stop-review gate now requests a structured verdict (plan 005). Mirror the
+  // legacy taskPayload outcomes, but in the schema-constrained shape real Codex
+  // returns under the stop-gate output schema: the decision lives in \`verdict\`,
+  // never in the prose. \`adversarial-clean\` is the "nothing to block" scenario.
+  if (BEHAVIOR === "adversarial-clean") {
+    return JSON.stringify({ verdict: "allow", reason: "No blocking issues found in the previous turn." });
+  }
+  return JSON.stringify({ verdict: "block", reason: "Missing empty-state guard in src/app.js:4-6." });
+}
+
 function taskPayload(prompt, resume) {
   if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Claude turn.")) {
     if (BEHAVIOR === "adversarial-clean") {
@@ -397,13 +408,25 @@ rl.on("line", (line) => {
 	          turnId,
 	          model: message.params.model ?? null,
 	          effort: message.params.effort ?? null,
+	          outputSchema: message.params.outputSchema ?? null,
 	          prompt
 	        };
 	        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
-        const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
-          ? structuredReviewPayload(prompt)
+        const verdictSchema =
+          message.params.outputSchema &&
+          message.params.outputSchema.properties &&
+          message.params.outputSchema.properties.verdict
+            ? message.params.outputSchema.properties.verdict
+            : null;
+        // Distinguish the two structured-verdict schemas by their enum: the
+        // stop-gate schema decides block/allow, the adversarial-review schema
+        // decides approve/needs-attention.
+        const isStopGateSchema =
+          verdictSchema && Array.isArray(verdictSchema.enum) && verdictSchema.enum.includes("block");
+        const payload = verdictSchema
+          ? (isStopGateSchema ? structuredStopGatePayload() : structuredReviewPayload(prompt))
           : taskPayload(prompt, thread.name && thread.name.startsWith("Codex Companion Task") && prompt.includes("Continue from the current thread state"));
 
         if (

@@ -79,6 +79,7 @@ import {
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
+const STOP_GATE_SCHEMA = path.join(ROOT_DIR, "schemas", "stop-gate-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -506,6 +507,16 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
+  // The stop-review gate launches itself through `task` (see
+  // stop-review-gate-hook.mjs). When this is that task, request a structured
+  // verdict via the stop-gate output schema — the same `outputSchema` mechanism
+  // the adversarial-review path uses with REVIEW_SCHEMA. Moving the verdict into
+  // a schema-constrained field (out-of-band from the free-text body) is the
+  // plan-005 injection mitigation. Detection reuses the marker already used for
+  // task metadata; a resumed task is never the gate, so it keeps the free-form path.
+  const isStopReviewTask =
+    !resumeThreadId && String(request.prompt ?? "").includes(STOP_REVIEW_TASK_MARKER);
+
   const result = await runAppServerTurn(workspaceRoot, {
     resumeThreadId,
     prompt: request.prompt,
@@ -515,7 +526,8 @@ async function executeTaskRun(request) {
     sandbox: request.write ? "workspace-write" : "read-only",
     onProgress: request.onProgress,
     persistThread: true,
-    threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
+    threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT),
+    ...(isStopReviewTask ? { outputSchema: readOutputSchema(STOP_GATE_SCHEMA) } : {})
   });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";

@@ -1881,7 +1881,19 @@ test("stop hook runs a stop-time review task and blocks on findings when the rev
 
   const fakeState = JSON.parse(fs.readFileSync(fakeStatePath, "utf8"));
   assert.match(fakeState.lastTurnStart.prompt, /<task>/i);
-  assert.match(fakeState.lastTurnStart.prompt, /<compact_output_contract>/i);
+  // Plan 005: the verdict now travels in a structured field, so the prompt
+  // instructs a structured verdict contract instead of an in-band first line.
+  assert.match(fakeState.lastTurnStart.prompt, /<structured_verdict_contract>/i);
+  // The stop-review task is launched with the stop-gate output schema (verdict
+  // enum block/allow), which is how the gate now reads the decision out-of-band.
+  assert.ok(
+    fakeState.lastTurnStart.outputSchema &&
+      fakeState.lastTurnStart.outputSchema.properties &&
+      fakeState.lastTurnStart.outputSchema.properties.verdict &&
+      Array.isArray(fakeState.lastTurnStart.outputSchema.properties.verdict.enum) &&
+      fakeState.lastTurnStart.outputSchema.properties.verdict.enum.includes("block"),
+    "the stop-review turn must request the stop-gate output schema"
+  );
   assert.match(fakeState.lastTurnStart.prompt, /Only review the work from the previous Claude turn/i);
   assert.match(fakeState.lastTurnStart.prompt, /I completed the refactor and updated the retry logic\./);
   // Plan 004: the prior assistant turn is fenced as untrusted data and the

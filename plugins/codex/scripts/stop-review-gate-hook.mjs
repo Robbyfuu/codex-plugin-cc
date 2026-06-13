@@ -138,6 +138,62 @@ export function parseStopReviewOutput(rawOutput) {
 }
 
 /**
+ * Read a STRUCTURED verdict out of the model's final message, falling back to
+ * the in-band substring parse only when no structured verdict is present.
+ *
+ * The verdict now travels in a schema-constrained field (see
+ * `schemas/stop-gate-output.schema.json`, requested via the Codex output schema
+ * for the stop-review task). Moving the verdict out-of-band from the free-text
+ * body is the plan-005 injection mitigation: crafted content in the diff / prior
+ * assistant turn can no longer flip the gate by making Codex emit a leading
+ * `ALLOW:`/`BLOCK:` line, because the decision reads the structured field, not
+ * the prose.
+ *
+ * Trust rules:
+ *  - A structured `block` is UNCONDITIONAL. A body-text `ALLOW:` (or anything
+ *    else in the reason/body) can never override it.
+ *  - A structured `allow` is trusted as-is and is NOT re-evaluated against the
+ *    body — stray `BLOCK:`-looking prose in the reason cannot re-block it.
+ *  - Any other shape (output is not JSON, or JSON without a recognized verdict)
+ *    falls through to `parseStopReviewOutput`, which keeps the legacy substring
+ *    behavior AND the "no verdict / rate-limit / parse → infra-error → fail
+ *    open" guarantee unchanged. Infra failures NEVER block (#6).
+ *
+ * @param {unknown} rawOutput
+ * @returns {{ verdict: "allow"|"block"|"infra-error", reason: string|null, kind?: string }}
+ */
+export function classifyStopReviewOutput(rawOutput) {
+  const text = String(rawOutput ?? "").trim();
+
+  if (text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const verdict = typeof parsed.verdict === "string" ? parsed.verdict.trim().toLowerCase() : "";
+      const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+
+      if (verdict === "block") {
+        // Unconditional: ignore the body entirely. Fall back to a generic reason
+        // when the structured reason is blank so the operator still gets a message.
+        return { verdict: "block", reason: reason || "the review flagged unresolved issues" };
+      }
+      if (verdict === "allow") {
+        return { verdict: "allow", reason: null };
+      }
+      // JSON without a usable verdict: do NOT trust it as a verdict. Fall through
+      // to the body parse, which fails open if it finds nothing either.
+    }
+  }
+
+  return parseStopReviewOutput(rawOutput);
+}
+
+/**
  * Map a classified review result to a stop-gate outcome. Pure: returns either a
  * block decision (`{ decision: "block", reason }`) for a genuine BLOCK verdict,
  * or an approve outcome (`{ decision: null, warning }`) for ALLOW and every
@@ -230,7 +286,12 @@ function runStopReview(cwd, input = {}) {
   } catch {
     return { verdict: "infra-error", kind: "parse", reason: "invalid JSON from the review task" };
   }
-  return parseStopReviewOutput(payload?.rawOutput);
+  // The review task is launched with the stop-gate output schema (see
+  // codex-companion.mjs executeTaskRun), so `rawOutput` is normally the
+  // structured verdict JSON. classifyStopReviewOutput reads that structured
+  // field first and only falls back to the in-band substring parse when it is
+  // absent — preserving the infra→fail-open guarantee in every no-verdict case.
+  return classifyStopReviewOutput(payload?.rawOutput);
 }
 
 async function main() {

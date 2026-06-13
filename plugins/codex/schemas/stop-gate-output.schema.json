@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "reason"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "block",
+        "allow"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}
