@@ -230,7 +230,13 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
       cwd: this.cwd,
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
+      // SECURITY: shell: false on every platform. The argv is the constant
+      // ["app-server"], so there is no need for a shell, and we must NOT select
+      // the Windows shell from process.env.SHELL (attacker-influenceable; also
+      // the source of MSYS/Git-Bash path mangling). The only allowed Windows
+      // fallback, if `codex` ever fails to resolve without a shell, is
+      // process.env.ComSpec (cmd.exe) — never SHELL.
+      shell: false,
       windowsHide: true
     });
 

@@ -34,14 +34,28 @@ export function isPidAlive(pid, killImpl = process.kill.bind(process)) {
 }
 
 export function runCommand(command, args = [], options = {}) {
-  const result = spawnSync(command, args, {
+  // SECURITY: spawn with shell: false on EVERY platform so `args` are passed as
+  // an explicit argv array, verbatim. We deliberately do NOT pick the Windows
+  // shell from process.env.SHELL (an attacker-influenceable env var inherited
+  // into the broker/workers) — that both granted shell-metacharacter
+  // interpretation and caused MSYS/Git-Bash path mangling. All callers here pass
+  // constant argv (`taskkill /PID …`, `codex app-server`); no non-constant
+  // argument may EVER flow into a shell-mode spawn. If a future Windows smoke
+  // check proves `codex`/`taskkill` cannot resolve without a shell, the ONLY
+  // allowed fallback is process.env.ComSpec (cmd.exe), never SHELL.
+  //
+  // `spawnImpl` is a local, default-valued seam used only to make the
+  // shell-selection contract testable; existing callers omit it and are
+  // unaffected (it defaults to the real spawnSync).
+  const spawnImpl = options.spawnImpl ?? spawnSync;
+  const result = spawnImpl(command, args, {
     cwd: options.cwd,
     env: options.env,
     encoding: "utf8",
     input: options.input,
     maxBuffer: options.maxBuffer,
     stdio: options.stdio ?? "pipe",
-    shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
+    shell: false,
     windowsHide: true
   });
 

@@ -1,7 +1,76 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import process from "node:process";
 
-import { terminateProcessTree } from "../plugins/codex/scripts/lib/process.mjs";
+import { runCommand, terminateProcessTree } from "../plugins/codex/scripts/lib/process.mjs";
+
+function fakeSpawnResult() {
+  return { status: 0, signal: null, stdout: "", stderr: "", error: null };
+}
+
+test("runCommand never selects the spawn shell from process.env.SHELL (POSIX)", () => {
+  let captured = null;
+  const previousShell = process.env.SHELL;
+  process.env.SHELL = "/usr/bin/evil-shell";
+  try {
+    runCommand("codex", ["app-server"], {
+      spawnImpl(command, args, options) {
+        captured = { command, args, options };
+        return fakeSpawnResult();
+      }
+    });
+  } finally {
+    if (previousShell === undefined) {
+      delete process.env.SHELL;
+    } else {
+      process.env.SHELL = previousShell;
+    }
+  }
+
+  assert.equal(captured.options.shell, false, "POSIX must spawn with shell: false");
+  assert.notEqual(captured.options.shell, "/usr/bin/evil-shell");
+});
+
+test("runCommand spawns the Windows taskkill argv with shell: false, never SHELL", () => {
+  // This is the exact constant invocation terminateProcessTree issues on
+  // Windows. Pre-hardening it spawned through `process.env.SHELL || true`; the
+  // contract now is shell: false on every platform. The only allowed future
+  // fallback (if `taskkill` ever fails to resolve without a shell) is ComSpec
+  // (cmd.exe) — the attacker-influenceable SHELL must never be selected.
+  let captured = null;
+  const previousShell = process.env.SHELL;
+  process.env.SHELL = "/usr/bin/evil-shell";
+  try {
+    runCommand("taskkill", ["/PID", "1234", "/T", "/F"], {
+      spawnImpl(command, args, options) {
+        captured = { command, args, options };
+        return fakeSpawnResult();
+      }
+    });
+  } finally {
+    if (previousShell === undefined) {
+      delete process.env.SHELL;
+    } else {
+      process.env.SHELL = previousShell;
+    }
+  }
+
+  assert.deepEqual(captured.args, ["/PID", "1234", "/T", "/F"], "argv must pass through verbatim");
+  assert.notEqual(captured.options.shell, "/usr/bin/evil-shell");
+  assert.notEqual(captured.options.shell, process.env.SHELL);
+  assert.ok(
+    captured.options.shell === false || captured.options.shell === process.env.ComSpec,
+    `Windows shell must be false or ComSpec, got ${JSON.stringify(captured.options.shell)}`
+  );
+});
+
+test("runCommand passes argv verbatim and defaults to the real spawnSync seam", () => {
+  // Guard the seam stays local + default-valued: omitting spawnImpl must still
+  // run a real command (here `node -e ""`, universally available on the runner).
+  const result = runCommand(process.execPath, ["-e", "process.exit(0)"]);
+  assert.equal(result.status, 0);
+  assert.equal(result.error, null);
+});
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
