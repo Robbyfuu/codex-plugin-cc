@@ -29,6 +29,7 @@ import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
 import { emitTurnNotification } from "./lib/notify.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
+import { redactSecrets } from "./lib/redact.mjs";
 import {
   generateJobId,
   getConfig,
@@ -58,6 +59,7 @@ import {
   nowIso,
   registerWorkerTerminationHandlers,
   runTrackedJob,
+  scrubTerminalJobRecord,
   SESSION_ID_ENV
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
@@ -565,7 +567,10 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Task";
   return {
     title,
-    summary: shorten(prompt || fallbackSummary)
+    // The summary is persisted to state (state.json + jobs/<id>.json) and shown
+    // by /peer:status. Redact obvious secret shapes so a pasted credential does
+    // not land in cleartext while keeping the summary human-useful.
+    summary: redactSecrets(shorten(prompt || fallbackSummary))
   };
 }
 
@@ -1246,11 +1251,15 @@ async function handleCancel(argv) {
     errorMessage: "Cancelled by user."
   };
 
-  writeJobFile(workspaceRoot, job.id, {
+  // Terminal write → scrub the verbatim prompt like the three terminal sites in
+  // tracked-jobs.mjs. `cancelled` is NON-resumable (render.mjs
+  // RESUMABLE_TERMINAL_STATUSES = {failed, interrupted}), so the retained prompt
+  // has zero functional benefit — keeping it would be a pure cleartext leak.
+  writeJobFile(workspaceRoot, job.id, scrubTerminalJobRecord({
     ...existing,
     ...nextJob,
     cancelledAt: completedAt
-  });
+  }));
   upsertJob(workspaceRoot, {
     id: job.id,
     status: "cancelled",

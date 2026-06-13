@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { flushJobToFailed, registerWorkerTerminationHandlers, runTrackedJob } from "../scripts/lib/tracked-jobs.mjs";
+import {
+  flushJobToFailed,
+  registerWorkerTerminationHandlers,
+  runTrackedJob,
+  scrubTerminalJobRecord
+} from "../scripts/lib/tracked-jobs.mjs";
 import { resolveJobFile, writeJobFile } from "../scripts/lib/state.mjs";
 import { CodexStallError } from "../scripts/lib/watchdog.mjs";
 
@@ -494,4 +499,146 @@ test("registerWorkerTerminationHandlers flushes at most once when both signals f
   fakeProcess.listeners.get("SIGINT")[0]("SIGINT");
 
   assert.equal(flushCount, 1, "the shared guard must prevent a second flush from the second signal");
+});
+
+// ---------------------------------------------------------------------------
+// Plan 003: minimize the persisted prompt. Once a job is terminal the full
+// `request.prompt` is no longer needed (resume keys on the Codex threadId, never
+// the persisted prompt), so it is scrubbed from the stored record. The rest of
+// `request` (cwd/model/effort/write) is preserved because resume DOES read it.
+// ---------------------------------------------------------------------------
+
+test("scrubTerminalJobRecord drops request.prompt but keeps the rest of request", () => {
+  const record = {
+    id: "task-x",
+    status: "completed",
+    summary: "do a thing",
+    request: {
+      cwd: "/repo",
+      model: "gpt-5",
+      effort: "high",
+      prompt: "secret prompt the worker already consumed",
+      write: true,
+      resumeThreadId: "thread-1",
+      jobId: "task-x"
+    }
+  };
+
+  const scrubbed = scrubTerminalJobRecord(record);
+
+  assert.equal(scrubbed.request.prompt, undefined, "the full prompt is removed");
+  assert.equal(scrubbed.request.cwd, "/repo", "cwd is preserved for resume colocation");
+  assert.equal(scrubbed.request.model, "gpt-5", "model is preserved for resume");
+  assert.equal(scrubbed.request.effort, "high", "effort is preserved for resume");
+  assert.equal(scrubbed.request.write, true, "write flag is preserved for resume");
+  assert.equal(scrubbed.request.resumeThreadId, "thread-1", "thread targeting is preserved");
+  assert.equal(scrubbed.summary, "do a thing", "the short summary is kept");
+});
+
+test("scrubTerminalJobRecord does not mutate the input record", () => {
+  const record = { id: "task-y", request: { cwd: "/repo", prompt: "keep me on the original" } };
+  const scrubbed = scrubTerminalJobRecord(record);
+  assert.equal(record.request.prompt, "keep me on the original", "input request is not mutated");
+  assert.notEqual(scrubbed.request, record.request, "a fresh request object is returned");
+});
+
+test("scrubTerminalJobRecord is a no-op for a record without a request", () => {
+  const record = { id: "task-z", status: "failed", summary: "no request here" };
+  const scrubbed = scrubTerminalJobRecord(record);
+  assert.deepEqual(scrubbed, record);
+});
+
+test("scrubTerminalJobRecord redacts a secret embedded in the persisted summary", () => {
+  const record = { id: "task-s", status: "completed", summary: "ship key sk-abcdEFGH1234567890 now" };
+  const scrubbed = scrubTerminalJobRecord(record);
+  assert.doesNotMatch(scrubbed.summary, /sk-abcdEFGH1234567890/, "an obvious secret in the summary is redacted on the terminal write");
+  assert.ok(scrubbed.summary.includes("«redacted»"));
+});
+
+test("runTrackedJob scrubs request.prompt from the stored record once the job completes", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const job = makeJob(workspaceRoot, {
+      id: "task-complete-scrub",
+      request: { cwd: workspaceRoot, model: "gpt-5", effort: "high", prompt: "FULL PROMPT WITH SECRETS", write: true }
+    });
+    const execution = { exitStatus: 0, threadId: "thread-1", turnId: "turn-1", payload: {}, rendered: "ok", summary: "s" };
+
+    await runTrackedJob(job, async () => execution, {});
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "completed");
+    assert.equal(stored.request.prompt, undefined, "the completed record must not retain the full prompt");
+    assert.equal(stored.request.cwd, workspaceRoot, "cwd survives so resume can colocate");
+    assert.equal(stored.request.model, "gpt-5", "model survives for resume");
+    assert.equal(stored.request.write, true, "write flag survives for resume");
+  });
+});
+
+test("runTrackedJob scrubs request.prompt from the stored record when the job fails", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const job = makeJob(workspaceRoot, {
+      id: "task-fail-scrub",
+      request: { cwd: workspaceRoot, prompt: "FULL PROMPT WITH SECRETS", write: false }
+    });
+    const error = new Error("boom");
+
+    await assert.rejects(
+      runTrackedJob(job, async () => {
+        throw error;
+      }, {}),
+      (thrown) => thrown === error
+    );
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.request.prompt, undefined, "the failed record must not retain the full prompt");
+    assert.equal(stored.request.cwd, workspaceRoot, "cwd survives so resume can colocate");
+  });
+});
+
+test("a still-running job KEEPS the full prompt the worker needs (scrub is terminal-only)", async () => {
+  await withTempWorkspace(async ({ workspaceRoot }) => {
+    const job = makeJob(workspaceRoot, {
+      id: "task-running-keeps",
+      request: { cwd: workspaceRoot, prompt: "FULL PROMPT THE WORKER STILL NEEDS", write: false }
+    });
+
+    // Inspect the persisted record at the RUNNING phase, mid-run, before the
+    // terminal write happens. The running write must still carry the prompt so a
+    // worker reading the record can execute it.
+    let runningPrompt;
+    await runTrackedJob(job, async () => {
+      const running = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+      runningPrompt = running.request?.prompt;
+      return { exitStatus: 0, threadId: "t", turnId: "u", payload: {}, rendered: "ok", summary: "s" };
+    }, {});
+
+    assert.equal(runningPrompt, "FULL PROMPT THE WORKER STILL NEEDS", "the running record must keep the prompt for the worker");
+
+    // ...and after completion it is scrubbed.
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.request.prompt, undefined, "the prompt is scrubbed only on the terminal write");
+  });
+});
+
+test("flushJobToFailed scrubs request.prompt when flushing an in-flight job to failed", async () => {
+  await withTempWorkspace(({ workspaceRoot }) => {
+    const job = {
+      id: "task-flush-scrub",
+      status: "running",
+      jobClass: "task",
+      pid: process.pid,
+      request: { cwd: workspaceRoot, prompt: "FULL PROMPT WITH SECRETS", write: false },
+      createdAt: "2026-03-18T15:32:00.000Z",
+      updatedAt: "2026-03-18T15:33:00.000Z"
+    };
+    writeJobFile(workspaceRoot, job.id, job);
+
+    flushJobToFailed(workspaceRoot, job.id, "worker received SIGTERM; flushing job to failed");
+
+    const stored = JSON.parse(fs.readFileSync(resolveJobFile(workspaceRoot, job.id), "utf8"));
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.request.prompt, undefined, "the flushed-to-failed record must not retain the full prompt");
+    assert.equal(stored.request.cwd, workspaceRoot, "cwd survives so resume can colocate");
+  });
 });

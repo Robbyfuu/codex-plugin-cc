@@ -3,6 +3,7 @@ import process from "node:process";
 
 import { openWatchPane, resolvePaneMarkerFile } from "./live-view.mjs";
 import { emitTurnNotification } from "./notify.mjs";
+import { redactSecrets } from "./redact.mjs";
 import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 import { recordTurnOutcome } from "./telemetry.mjs";
 import { CodexStallError } from "./watchdog.mjs";
@@ -114,6 +115,47 @@ export function nowIso() {
 const FLUSHABLE_STATUSES = new Set(["running", "queued"]);
 
 /**
+ * Plan 003: minimize the prompt persisted to the state directory once a job is
+ * terminal. While a job is `queued`/`running` the detached worker still needs
+ * the full `request.prompt` to execute it, so the prompt is left intact on those
+ * writes. Once the job reaches a terminal status the verbatim prompt is no longer
+ * needed — resume builds a fresh continuation prompt keyed on the surviving Codex
+ * `threadId` (see prepareTaskResume) and never reads the original persisted
+ * prompt — so we drop it from the stored record.
+ *
+ * What is preserved: the rest of `request` (cwd/model/effort/write/resumeThreadId/
+ * jobId), because prepareTaskResume DOES read those to colocate and re-launch the
+ * resumed job. Only `prompt` is removed. The short `summary` is kept but passed
+ * through redactSecrets as defense-in-depth so an obvious secret shape never
+ * survives in cleartext.
+ *
+ * Pure: returns a fresh record (and a fresh nested `request`) without mutating
+ * the input, so callers can scrub a record built from an existing object safely.
+ *
+ * @param {object} record the job record about to be persisted at a terminal status
+ * @returns {object} a copy safe to write to the state directory
+ */
+export function scrubTerminalJobRecord(record) {
+  if (!record || typeof record !== "object") {
+    return record;
+  }
+
+  const scrubbed = { ...record };
+
+  if (typeof scrubbed.summary === "string") {
+    scrubbed.summary = redactSecrets(scrubbed.summary);
+  }
+
+  if (scrubbed.request && typeof scrubbed.request === "object") {
+    // Drop ONLY the verbatim prompt; keep everything resume reads.
+    const { prompt: _droppedPrompt, ...requestWithoutPrompt } = scrubbed.request;
+    scrubbed.request = requestWithoutPrompt;
+  }
+
+  return scrubbed;
+}
+
+/**
  * Best-effort flush of an in-flight job to `failed`. Used by the worker's
  * termination handlers (#228) so a worker killed by SIGTERM/SIGINT does not
  * strand its job as `running`. Mirrors runTrackedJob's catch-branch shape
@@ -155,7 +197,8 @@ export function flushJobToFailed(workspaceRoot, jobId, note, options = {}) {
   const completedAt = nowIso();
   const base = existing ?? { id: jobId };
   try {
-    writeJobFileImpl(workspaceRoot, jobId, {
+    // Terminal write → scrub the verbatim prompt (resume keys on threadId).
+    writeJobFileImpl(workspaceRoot, jobId, scrubTerminalJobRecord({
       ...base,
       status: "failed",
       phase: "failed",
@@ -163,7 +206,7 @@ export function flushJobToFailed(workspaceRoot, jobId, note, options = {}) {
       error: note,
       errorMessage: base.errorMessage ?? note,
       completedAt
-    });
+    }));
   } catch {
     // Best-effort: never throw out of a shutdown path.
   }
@@ -421,7 +464,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     const execution = await runner();
     const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
+    // Terminal write → scrub the verbatim prompt (resume keys on threadId).
+    writeJobFile(job.workspaceRoot, job.id, scrubTerminalJobRecord({
       ...runningRecord,
       status: completionStatus,
       threadId: execution.threadId ?? null,
@@ -431,7 +475,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       completedAt,
       result: execution.payload,
       rendered: execution.rendered
-    });
+    }));
     upsertJob(job.workspaceRoot, {
       id: job.id,
       status: completionStatus,
@@ -455,6 +499,10 @@ export async function runTrackedJob(job, runner, options = {}) {
     // resolve is "interrupted" — its own VISIBLE bucket (named for the dominant
     // cause) so /peer:stats surfaces this churn instead of hiding it inside
     // "completed".
+    // NOTE: `settledReason` is a TELEMETRY label only. The status PERSISTED above
+    // on this branch is "completed" or "failed" (never the literal "interrupted"),
+    // and both went through scrubTerminalJobRecord — so there is no unscrubbed
+    // "interrupted" record despite this telemetry bucket name.
     const settledReason = execution.exitStatus === 0 ? "completed" : "interrupted";
     emitOutcome(buildOutcome(settledReason, execution.threadId));
     return execution;
@@ -462,7 +510,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const existing = readStoredJobOrNull(job.workspaceRoot, job.id) ?? runningRecord;
     const completedAt = nowIso();
-    writeJobFile(job.workspaceRoot, job.id, {
+    // Terminal write → scrub the verbatim prompt (resume keys on threadId).
+    writeJobFile(job.workspaceRoot, job.id, scrubTerminalJobRecord({
       ...existing,
       status: "failed",
       phase: "failed",
@@ -470,7 +519,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       pid: null,
       completedAt,
       logFile: options.logFile ?? job.logFile ?? existing.logFile ?? null
-    });
+    }));
     upsertJob(job.workspaceRoot, {
       id: job.id,
       status: "failed",
