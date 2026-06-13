@@ -1,6 +1,6 @@
 {
   "name": "peer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "Codex from Claude Code with anti-hang watchdogs, telemetry, notifications, and health tooling — an enhanced fork of openai/codex-plugin-cc.",
