@@ -47,6 +47,56 @@ test("buildTmuxSplitArgs single-quotes paths safely", () => {
   assert.equal(args[2], "tail -F '/state/jobs/it'\\''s a job.log'");
 });
 
+test("buildTmuxSplitArgs keeps a metacharacter/quote-laden path inert under sh -c", () => {
+  // The command string is executed by tmux via `sh -c`, so any shell
+  // metacharacter that escaped the single-quoted span would be interpreted.
+  // This hostile path packs a command substitution, a sequencing operator, a
+  // pipe, a redirect, a backtick, a glob, and an embedded single quote — the
+  // single quote is the only character that can terminate the quoted span, so
+  // it must be escaped as '\'' and everything else must stay literal.
+  const hostile = "/tmp/jobs/x'; rm -rf ~ #`touch pwned`$(id)|cat>/etc/passwd &*.log";
+  const args = buildTmuxSplitArgs(hostile);
+
+  assert.equal(args[0], "split-window");
+  assert.equal(args[1], "-d");
+
+  // The whole path is wrapped in a single-quoted span; every embedded single
+  // quote becomes the literal escape sequence '\'' and no metacharacter leaks.
+  const expectedQuoted = "'" + hostile.replace(/'/g, "'\\''") + "'";
+  assert.equal(args[2], `tail -F ${expectedQuoted}`);
+
+  // Structural guarantee: emulate how a POSIX shell unquotes the payload and
+  // assert it collapses to exactly the original path as a SINGLE literal word.
+  // Inside a single-quoted span every byte is literal; the span ends only at a
+  // lone `'`. Walking that grammar over the produced string must reproduce the
+  // original path with zero shell-interpretable bytes left exposed to `sh -c`.
+  const payload = args[2].slice("tail -F ".length);
+  let unquoted = "";
+  let i = 0;
+  let inQuotes = false;
+  while (i < payload.length) {
+    const ch = payload[i];
+    if (ch === "'") {
+      inQuotes = !inQuotes;
+      i += 1;
+      continue;
+    }
+    if (!inQuotes) {
+      // Outside a quoted span the ONLY tolerated bytes are the backslash-escaped
+      // quote that bridges two spans ( \\' ). Anything else would reach the shell.
+      assert.equal(ch, "\\", `unquoted byte ${JSON.stringify(ch)} would reach sh -c`);
+      assert.equal(payload[i + 1], "'", "the only legal unquoted escape is a backslashed quote");
+      unquoted += "'";
+      i += 2;
+      continue;
+    }
+    unquoted += ch;
+    i += 1;
+  }
+  assert.equal(inQuotes, false, "the single-quoted span must be closed");
+  assert.equal(unquoted, hostile);
+});
+
 test("resolvePaneMarkerFile derives a stable sibling marker next to the log", () => {
   const marker = resolvePaneMarkerFile("/state/jobs/job-1.log");
   assert.equal(marker, "/state/jobs/job-1.log.pane");

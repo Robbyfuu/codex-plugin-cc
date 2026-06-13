@@ -63,6 +63,18 @@ function shellSingleQuote(value) {
  * Build the argv for `tmux split-window` that tails the given log file in a
  * detached pane.
  *
+ * SECURITY (load-bearing): the third element is NOT a plain argv token — `tmux
+ * split-window` runs its command argument through `/bin/sh -c`, so this string
+ * crosses into a shell interpreter. `shellSingleQuote` is the ONLY thing
+ * preventing command injection from `logFile`: it wraps the path in a literal
+ * POSIX single-quoted span and escapes embedded quotes as '\''. `logFile` is
+ * internally-generated today (no live vulnerability), but any change here must
+ * preserve the single-quoting AND the metacharacter regression test in
+ * test/live-view.test.mjs. Do NOT "simplify" by interpolating the raw path, and
+ * do NOT try to rewrite this to an argv array — split-window has no clean argv
+ * form for its command, so correct quoting is the contract. If a future change
+ * ever lets a user supply the path, add allowlist/validation on `logFile` too.
+ *
  * @param {string} logFile
  * @returns {string[]}
  */
