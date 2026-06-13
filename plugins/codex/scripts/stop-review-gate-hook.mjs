@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { getCodexAvailability } from "./lib/codex.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
+import { fenceUntrusted, loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
@@ -47,11 +47,16 @@ function filterJobsForCurrentSession(jobs, input = {}) {
   return jobs.filter((job) => job.sessionId === sessionId);
 }
 
-function buildStopReviewPrompt(input = {}) {
+export function buildStopReviewPrompt(input = {}) {
   const lastAssistantMessage = String(input.last_assistant_message ?? "").trim();
   const template = loadPromptTemplate(ROOT_DIR, "stop-review-gate");
+  // The prior assistant turn is UNTRUSTED: it may quote repo/Codex content that
+  // a contributor crafted to steer this gate (prompt injection). Fence it as
+  // data so a forged ALLOW/BLOCK or "ignore instructions" line inside it lands
+  // as content to review, not as instructions to follow. The "Previous Claude
+  // response:" label is trusted scaffolding and stays outside the fence.
   const claudeResponseBlock = lastAssistantMessage
-    ? ["Previous Claude response:", lastAssistantMessage].join("\n")
+    ? ["Previous Claude response:", fenceUntrusted("CLAUDE_RESPONSE_BLOCK", lastAssistantMessage)].join("\n")
     : "";
   return interpolateTemplate(template, {
     CLAUDE_RESPONSE_BLOCK: claudeResponseBlock

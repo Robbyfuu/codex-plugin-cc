@@ -28,7 +28,7 @@ import { buildDoctorReport, planCleanup, executeCleanup } from "./lib/doctor.mjs
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
 import { emitTurnNotification } from "./lib/notify.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
+import { fenceUntrusted, loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { redactSecrets } from "./lib/redact.mjs";
 import {
   generateJobId,
@@ -256,12 +256,18 @@ async function handleSetup(argv) {
 
 function buildAdversarialReviewPrompt(context, focusText) {
   const template = loadPromptTemplate(ROOT_DIR, "adversarial-review");
+  // REVIEW_INPUT (the git diff / working-tree text) and USER_FOCUS (free-form
+  // focus text) are UNTRUSTED: when reviewing an external contributor's branch,
+  // crafted text inside either can otherwise land in the model's instruction
+  // position and steer the verdict (prompt injection). Fence them as data.
+  // REVIEW_KIND, TARGET_LABEL, and REVIEW_COLLECTION_GUIDANCE are trusted,
+  // internally-generated values and stay unfenced.
   return interpolateTemplate(template, {
     REVIEW_KIND: "Adversarial Review",
     TARGET_LABEL: context.target.label,
-    USER_FOCUS: focusText || "No extra focus provided.",
+    USER_FOCUS: fenceUntrusted("USER_FOCUS", focusText || "No extra focus provided."),
     REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
-    REVIEW_INPUT: context.content
+    REVIEW_INPUT: fenceUntrusted("REVIEW_INPUT", context.content)
   });
 }
 
