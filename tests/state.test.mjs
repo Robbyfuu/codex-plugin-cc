@@ -5,7 +5,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { ensureStateDir, resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
+import {
+  ensureAppServerRuntimeDir,
+  ensureStateDir,
+  resolveAppServerRuntimeDir,
+  resolveJobFile,
+  resolveJobLogFile,
+  resolveStateDir,
+  resolveStateFile,
+  saveState
+} from "../plugins/codex/scripts/lib/state.mjs";
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   // This test asserts the FALLBACK state root (under os.tmpdir()), which only
@@ -73,6 +82,17 @@ test("ensureStateDir creates the state dir with owner-only (0700) mode", { skip:
       process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
     }
   }
+});
+
+test("ensureAppServerRuntimeDir creates a codex-owned runtime outside per-workspace state", { skip: process.platform === "win32" ? "POSIX-only mode bits" : false }, () => {
+  const pluginDataDir = makeTempDir();
+  const env = { CLAUDE_PLUGIN_DATA: pluginDataDir };
+
+  const runtimeDir = ensureAppServerRuntimeDir(env);
+
+  assert.equal(runtimeDir, resolveAppServerRuntimeDir(env));
+  assert.equal(runtimeDir.startsWith(path.join(pluginDataDir, "runtime")), true);
+  assert.equal(fs.statSync(runtimeDir).mode & 0o777, 0o700);
 });
 
 test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {

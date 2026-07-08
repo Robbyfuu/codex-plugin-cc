@@ -68,6 +68,7 @@ test("DIRECT app-server fallback: spawn env carries CODEX_HOME when an account i
   await CodexAppServerClient.connect("/repo", {
     disableBroker: true,
     env: codexEnv,
+    appServerCwd: os.tmpdir(),
     spawnImpl
   }).catch(() => {});
 
@@ -92,6 +93,7 @@ test("DIRECT app-server fallback: with NO active account, spawn env is byte-for-
   await CodexAppServerClient.connect("/repo", {
     disableBroker: true,
     env: codexEnv,
+    appServerCwd: os.tmpdir(),
     spawnImpl
   }).catch(() => {});
 

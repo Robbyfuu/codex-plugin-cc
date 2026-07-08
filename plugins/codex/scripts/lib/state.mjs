@@ -11,6 +11,8 @@ const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
+const RUNTIME_DIR_NAME = "runtime";
+const APP_SERVER_RUNTIME_DIR_NAME = "app-server";
 const TELEMETRY_FILE_NAME = "telemetry.jsonl";
 // Broker events live in a SIBLING file, deliberately separate from the per-turn
 // telemetry file. The broker is a second writer; keeping it off the turn file
@@ -40,6 +42,21 @@ function defaultState() {
 export function resolvePluginDataRoot(env = process.env) {
   const pluginDataDir = env?.[PLUGIN_DATA_ENV];
   return pluginDataDir ? pluginDataDir : FALLBACK_STATE_ROOT_DIR;
+}
+
+export function resolveAppServerRuntimeDir(env = process.env) {
+  return path.join(resolvePluginDataRoot(env), RUNTIME_DIR_NAME, APP_SERVER_RUNTIME_DIR_NAME);
+}
+
+export function ensureAppServerRuntimeDir(env = process.env) {
+  const runtimeDir = resolveAppServerRuntimeDir(env);
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(runtimeDir, 0o700);
+  } catch {
+    /* best-effort */
+  }
+  return runtimeDir;
 }
 
 export function resolveStateDir(cwd) {

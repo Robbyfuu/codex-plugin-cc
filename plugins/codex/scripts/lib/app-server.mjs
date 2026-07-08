@@ -15,6 +15,7 @@ import readline from "node:readline";
 import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
+import { ensureAppServerRuntimeDir } from "./state.mjs";
 import { CodexTimeoutError, resolveTimeouts } from "./watchdog.mjs";
 
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
@@ -33,6 +34,7 @@ const DEFAULT_CLIENT_INFO = {
 /** @type {InitializeCapabilities} */
 const DEFAULT_CAPABILITIES = {
   experimentalApi: false,
+  requestAttestation: false,
   optOutNotificationMethods: [
     "item/agentMessage/delta",
     "item/reasoning/summaryTextDelta",
@@ -40,6 +42,43 @@ const DEFAULT_CAPABILITIES = {
     "item/reasoning/textDelta"
   ]
 };
+
+const GIT_ENV_VARS_TO_SCRUB = new Set([
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE",
+  "GIT_NAMESPACE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_QUARANTINE_PATH",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE"
+]);
+
+function shouldScrubGitEnvVar(name) {
+  return GIT_ENV_VARS_TO_SCRUB.has(name) || /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(name);
+}
+
+export function sanitizeCodexSpawnEnv(env = process.env) {
+  const sanitized = { ...env };
+  for (const name of Object.keys(sanitized)) {
+    if (shouldScrubGitEnvVar(name)) {
+      delete sanitized[name];
+    }
+  }
+  sanitized.GIT_CONFIG_COUNT = "1";
+  sanitized.GIT_CONFIG_KEY_0 = "core.logAllRefUpdates";
+  sanitized.GIT_CONFIG_VALUE_0 = "always";
+  return sanitized;
+}
 
 function buildJsonRpcError(code, message, data) {
   return data === undefined ? { code, message } : { code, message, data };
@@ -229,9 +268,14 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
     // `spawnImpl` is a default-valued seam used only to make the spawned env
     // observable in tests; production callers omit it and get the real spawn.
     const spawnImpl = this.options.spawnImpl ?? spawn;
+    const spawnEnv = sanitizeCodexSpawnEnv(this.options.env ?? process.env);
+    const appServerCwd = this.options.appServerCwd ?? ensureAppServerRuntimeDir(spawnEnv);
     this.proc = spawnImpl("codex", ["app-server"], {
-      cwd: this.cwd,
-      env: this.options.env ?? process.env,
+      // Keep Codex's own startup/plugin-sync git plumbing out of the target
+      // repository. The per-thread workspace still travels in thread/start and
+      // thread/resume params; this is only the OS process cwd for app-server.
+      cwd: appServerCwd,
+      env: spawnEnv,
       stdio: ["pipe", "pipe", "pipe"],
       // SECURITY: shell: false on every platform. The argv is the constant
       // ["app-server"], so there is no need for a shell, and we must NOT select
@@ -255,10 +299,13 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
     });
 
     this.proc.on("exit", (code, signal) => {
+      const stderr = this.stderr.trim();
       const detail =
         code === 0
           ? null
-          : createProtocolError(`codex app-server exited unexpectedly (${signal ? `signal ${signal}` : `exit ${code}`}).`);
+          : createProtocolError(
+              `codex app-server exited unexpectedly (${signal ? `signal ${signal}` : `exit ${code}`}).${stderr ? `\n${stderr}` : ""}`
+            );
       this.handleExit(detail);
     });
 

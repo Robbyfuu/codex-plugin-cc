@@ -84,6 +84,7 @@ test("continue is not exposed as a user-facing command", () => {
     "setup.md",
     "stats.md",
     "status.md",
+    "transfer.md",
     "watch.md"
   ]);
   // The guard that matters for this test: `continue` is never exposed as a
@@ -171,6 +172,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(readme, /uses the same review target selection as `\/peer:review`/i);
   assert.match(readme, /--base main challenge whether this was the right caching and retry design/);
   assert.match(readme, /### `\/peer:rescue`/);
+  assert.match(readme, /### `\/peer:transfer`/);
   assert.match(readme, /### `\/peer:status`/);
   assert.match(readme, /### `\/peer:result`/);
   assert.match(readme, /### `\/peer:cancel`/);
@@ -193,11 +195,14 @@ test("rescue path forwards --resume-id end-to-end so the stall hint is real", ()
   assert.match(rescue, /resuming the same job id twice creates two independent linked jobs/i);
 });
 
-test("result and cancel commands are exposed as deterministic runtime entrypoints", () => {
+test("transfer, result, and cancel commands are exposed as deterministic runtime entrypoints", () => {
+  const transfer = read("commands/transfer.md");
   const result = read("commands/result.md");
   const cancel = read("commands/cancel.md");
   const resultHandling = read("skills/codex-result-handling/SKILL.md");
 
+  assert.match(transfer, /disable-model-invocation:\s*true/);
+  assert.match(transfer, /codex-companion\.mjs" transfer "\$ARGUMENTS"/);
   assert.match(result, /disable-model-invocation:\s*true/);
   assert.match(result, /codex-companion\.mjs" result "\$ARGUMENTS"/);
   assert.match(cancel, /disable-model-invocation:\s*true/);

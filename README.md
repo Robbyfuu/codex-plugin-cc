@@ -25,7 +25,7 @@
 
 - `/peer:review` for a normal read-only Codex review
 - `/peer:adversarial-review` for a steerable challenge review
-- `/peer:rescue`, `/peer:status`, `/peer:result`, and `/peer:cancel` to delegate work and manage background jobs
+- `/peer:rescue`, `/peer:transfer`, `/peer:status`, `/peer:result`, and `/peer:cancel` to delegate work, hand off sessions, and manage background jobs
 - `/peer:watch`, `/peer:stats`, and `/peer:doctor` for live visibility, telemetry, and health (added by this fork)
 
 ## Requirements
@@ -178,6 +178,21 @@ Ask Codex to redesign the database connection to be more resilient.
 - if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
 - if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
 - follow-up rescue requests can continue the latest Codex task in the repo
+
+### `/peer:transfer`
+
+Creates a persistent Codex thread from the current Claude Code session and prints a `codex resume <session-id>` command.
+
+Use it when you started a debugging or implementation conversation in Claude Code and want to continue that same context directly in Codex.
+
+Examples:
+
+```bash
+/peer:transfer
+/peer:transfer --source ~/.claude/projects/-Users-me-repo/<session-id>.jsonl
+```
+
+The plugin's existing `SessionStart` hook supplies the current transcript path automatically; `--source` is available as a manual override. The transfer uses Codex's external-agent session importer, so it follows the same conversion rules as importing Claude history in the Codex App and creates visible turns that can be continued in the App or TUI. The source must be under `~/.claude/projects`, and older Codex versions that do not expose session import must be upgraded before using this command.
 
 ### `/peer:status`
 
