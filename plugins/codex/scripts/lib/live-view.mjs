@@ -2,6 +2,8 @@ import fs from "node:fs";
 import process from "node:process";
 import { spawn } from "node:child_process";
 
+import { WATCH_PANE_ENV as PEER_WATCH_PANE_ENV, readCompanionEnv } from "./companion-env.mjs";
+
 /**
  * Live-visibility helper: open a tmux pane that tails a job's live log. The
  * per-event tee into that log is handled upstream by the progress reporter in
@@ -9,7 +11,7 @@ import { spawn } from "node:child_process";
  * best-effort: a pane failure must never crash a turn.
  */
 
-export const WATCH_PANE_ENV = "CODEX_COMPANION_WATCH_PANE";
+export const WATCH_PANE_ENV = PEER_WATCH_PANE_ENV;
 
 function nowIso() {
   return new Date().toISOString();
@@ -28,7 +30,7 @@ export function isTruthy(value) {
 
 /**
  * Decide whether the auto tmux pane should open. Enabled by default whenever
- * `TMUX` is set; an explicit knob (`CODEX_COMPANION_WATCH_PANE`) overrides in
+ * `TMUX` is set; an explicit knob (`PEER_COMPANION_WATCH_PANE`) overrides in
  * either direction.
  *
  * @param {NodeJS.ProcessEnv} [env]
@@ -36,7 +38,7 @@ export function isTruthy(value) {
  */
 export function isWatchPaneEnabled(env = process.env) {
   const source = env ?? {};
-  const raw = source[WATCH_PANE_ENV];
+  const raw = readCompanionEnv("WATCH_PANE", source);
   if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
     if (isFalsey(raw)) {
       return false;

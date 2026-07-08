@@ -5,21 +5,16 @@ import process from "node:process";
 
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
-import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
-  LOG_FILE_ENV,
   loadBrokerSession,
-  PID_FILE_ENV,
   sendBrokerShutdown,
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
+import { PLUGIN_DATA_ENV, SESSION_ID_ENV, readCompanionEnv } from "./lib/companion-env.mjs";
 import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
 import { TRANSCRIPT_PATH_ENV } from "./lib/claude-session-transfer.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
-
-export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
-const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 
 async function readHookInput() {
   // Non-blocking-safe stdin read so a never-closing stdin or EAGAIN under
@@ -80,18 +75,19 @@ function cleanupSessionJobs(cwd, sessionId) {
 function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
-  appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+  appendEnvVar(PLUGIN_DATA_ENV, readCompanionEnv("PLUGIN_DATA", process.env));
 }
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
+  const brokerEndpointEnv = readCompanionEnv("BROKER_ENDPOINT", process.env);
   const brokerSession =
     loadBrokerSession(cwd) ??
-    (process.env[BROKER_ENDPOINT_ENV]
+    (brokerEndpointEnv
       ? {
-          endpoint: process.env[BROKER_ENDPOINT_ENV],
-          pidFile: process.env[PID_FILE_ENV] ?? null,
-          logFile: process.env[LOG_FILE_ENV] ?? null
+          endpoint: brokerEndpointEnv,
+          pidFile: readCompanionEnv("PID_FILE", process.env) ?? null,
+          logFile: readCompanionEnv("LOG_FILE", process.env) ?? null
         }
       : null);
   const brokerEndpoint = brokerSession?.endpoint ?? null;
@@ -104,7 +100,7 @@ async function handleSessionEnd(input) {
     await sendBrokerShutdown(brokerEndpoint);
   }
 
-  cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  cleanupSessionJobs(cwd, input.session_id || readCompanionEnv("SESSION_ID", process.env));
   teardownBrokerSession({
     endpoint: brokerEndpoint,
     pidFile,

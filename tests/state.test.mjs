@@ -16,36 +16,53 @@ import {
   saveState
 } from "../plugins/codex/scripts/lib/state.mjs";
 
+function withPluginDataEnv(values, fn) {
+  const previousPeerPluginData = process.env.PEER_PLUGIN_DATA;
+  const previousLegacyPluginData = process.env.CLAUDE_PLUGIN_DATA;
+  try {
+    for (const name of ["PEER_PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"]) {
+      if (Object.prototype.hasOwnProperty.call(values, name)) {
+        process.env[name] = values[name];
+      } else {
+        delete process.env[name];
+      }
+    }
+    return fn();
+  } finally {
+    if (previousPeerPluginData == null) {
+      delete process.env.PEER_PLUGIN_DATA;
+    } else {
+      process.env.PEER_PLUGIN_DATA = previousPeerPluginData;
+    }
+    if (previousLegacyPluginData == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousLegacyPluginData;
+    }
+  }
+}
+
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   // This test asserts the FALLBACK state root (under os.tmpdir()), which only
-  // applies when CLAUDE_PLUGIN_DATA is unset. Isolate from any ambient value so
-  // the test is deterministic regardless of the runner's environment.
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  delete process.env.CLAUDE_PLUGIN_DATA;
-
-  try {
+  // applies when both PEER_PLUGIN_DATA and legacy CLAUDE_PLUGIN_DATA are unset.
+  // Isolate from any ambient value so the test is deterministic regardless of
+  // the runner's environment.
+  withPluginDataEnv({}, () => {
     const workspace = makeTempDir();
     const stateDir = resolveStateDir(workspace);
 
     assert.equal(stateDir.startsWith(os.tmpdir()), true);
+    assert.match(stateDir, /peer-companion/);
     assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
     assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
-    }
-  }
+  });
 });
 
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
+test("resolveStateDir falls back to legacy CLAUDE_PLUGIN_DATA when PEER_PLUGIN_DATA is absent", () => {
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
 
-  try {
+  withPluginDataEnv({ CLAUDE_PLUGIN_DATA: pluginDataDir }, () => {
     const stateDir = resolveStateDir(workspace);
 
     assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
@@ -54,39 +71,51 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
       stateDir,
       new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
     );
-  } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
-    }
-  }
+  });
+});
+
+test("resolveStateDir prefers PEER_PLUGIN_DATA over legacy CLAUDE_PLUGIN_DATA", () => {
+  const workspace = makeTempDir();
+  const peerPluginDataDir = makeTempDir();
+  const legacyPluginDataDir = makeTempDir();
+
+  withPluginDataEnv({ PEER_PLUGIN_DATA: peerPluginDataDir, CLAUDE_PLUGIN_DATA: legacyPluginDataDir }, () => {
+    const stateDir = resolveStateDir(workspace);
+
+    assert.equal(stateDir.startsWith(path.join(peerPluginDataDir, "state")), true);
+    assert.equal(stateDir.startsWith(path.join(legacyPluginDataDir, "state")), false);
+  });
+});
+
+test("resolveStateDir does not fall back to legacy CLAUDE_PLUGIN_DATA when PEER_PLUGIN_DATA is empty", () => {
+  const workspace = makeTempDir();
+  const legacyPluginDataDir = makeTempDir();
+
+  withPluginDataEnv({ PEER_PLUGIN_DATA: "", CLAUDE_PLUGIN_DATA: legacyPluginDataDir }, () => {
+    const stateDir = resolveStateDir(workspace);
+
+    assert.equal(stateDir.startsWith(path.join(legacyPluginDataDir, "state")), false);
+    assert.equal(stateDir.startsWith(os.tmpdir()), true);
+    assert.match(stateDir, /peer-companion/);
+  });
 });
 
 test("ensureStateDir creates the state dir with owner-only (0700) mode", { skip: process.platform === "win32" ? "POSIX-only mode bits" : false }, () => {
-  // Use an explicit CLAUDE_PLUGIN_DATA root so the assertion is deterministic
+  // Use an explicit PEER_PLUGIN_DATA root so the assertion is deterministic
   // regardless of the runner's umask on the shared os.tmpdir() fallback.
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
 
-  try {
+  withPluginDataEnv({ PEER_PLUGIN_DATA: pluginDataDir }, () => {
     ensureStateDir(workspace);
     const stateDir = resolveStateDir(workspace);
     assert.equal(fs.statSync(stateDir).mode & 0o777, 0o700);
-  } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
-    } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
-    }
-  }
+  });
 });
 
 test("ensureAppServerRuntimeDir creates a codex-owned runtime outside per-workspace state", { skip: process.platform === "win32" ? "POSIX-only mode bits" : false }, () => {
   const pluginDataDir = makeTempDir();
-  const env = { CLAUDE_PLUGIN_DATA: pluginDataDir };
+  const env = { PEER_PLUGIN_DATA: pluginDataDir };
 
   const runtimeDir = ensureAppServerRuntimeDir(env);
 

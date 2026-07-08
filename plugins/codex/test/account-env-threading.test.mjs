@@ -190,5 +190,5 @@ test("withAppServer threads options.env all the way to CodexAppServerClient.conn
 // Guard the BROKER_ENDPOINT_ENV import is real (keeps the import meaningful and
 // documents that the broker endpoint env name is part of this surface).
 test("broker endpoint env constant is exported", () => {
-  assert.equal(typeof BROKER_ENDPOINT_ENV, "string");
+  assert.equal(BROKER_ENDPOINT_ENV, "PEER_COMPANION_APP_SERVER_ENDPOINT");
 });

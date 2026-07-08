@@ -201,6 +201,7 @@ test("transfer delegates the current Claude session directly to native import", 
   fs.mkdirSync(repo, { recursive: true });
   const projectDir = path.join(home, ".claude", "projects", "-repo");
   const sourcePath = path.join(projectDir, `${sessionId}.jsonl`);
+  const legacySourcePath = path.join(projectDir, "legacy-session.jsonl");
   fs.mkdirSync(projectDir, { recursive: true });
   installFakeCodex(binDir);
   initGitRepo(repo);
@@ -215,13 +216,22 @@ test("transfer delegates the current Claude session directly to native import", 
     ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
     "utf8"
   );
+  fs.writeFileSync(
+    legacySourcePath,
+    [
+      { type: "custom-title", customTitle: "Legacy transfer" },
+      { type: "user", cwd: repo, message: { role: "user", content: "Legacy request" } }
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    "utf8"
+  );
   const result = run("node", [SCRIPT, "transfer", "--json"], {
     cwd: repo,
     env: {
       ...buildEnv(binDir),
       HOME: home,
       CODEX_HOME: path.join(home, ".codex"),
-      CODEX_COMPANION_TRANSCRIPT_PATH: sourcePath
+      PEER_COMPANION_TRANSCRIPT_PATH: sourcePath,
+      CODEX_COMPANION_TRANSCRIPT_PATH: legacySourcePath
     }
   });
 
@@ -719,7 +729,7 @@ test("task --resume-last ignores running tasks from other Claude sessions", () =
   assert.match(resume.stderr, /No previous Codex task thread was found for this repository\./);
 });
 
-test("session start hook exports the Claude session id, transcript path, and plugin data dir", () => {
+test("session start hook exports peer session id, transcript path, and plugin data dir only", () => {
   const repo = makeTempDir();
   const envFile = path.join(makeTempDir(), "claude-env.sh");
   fs.writeFileSync(envFile, "", "utf8");
@@ -731,6 +741,7 @@ test("session start hook exports the Claude session id, transcript path, and plu
     env: {
       ...process.env,
       CLAUDE_ENV_FILE: envFile,
+      PEER_PLUGIN_DATA: pluginDataDir,
       CLAUDE_PLUGIN_DATA: pluginDataDir
     },
     input: JSON.stringify({
@@ -744,7 +755,7 @@ test("session start hook exports the Claude session id, transcript path, and plu
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
     fs.readFileSync(envFile, "utf8"),
-    `export CODEX_COMPANION_SESSION_ID='sess-current'\nexport CODEX_COMPANION_TRANSCRIPT_PATH='${transcriptPath}'\nexport CLAUDE_PLUGIN_DATA='${pluginDataDir}'\n`
+    `export PEER_COMPANION_SESSION_ID='sess-current'\nexport PEER_COMPANION_TRANSCRIPT_PATH='${transcriptPath}'\nexport PEER_PLUGIN_DATA='${pluginDataDir}'\n`
   );
 });
 

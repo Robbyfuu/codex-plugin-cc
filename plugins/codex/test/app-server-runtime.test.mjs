@@ -27,8 +27,10 @@ function makeFailingChild() {
 
 test("direct app-server spawn uses codex-owned runtime cwd and scrubs repo-targeting git env", async () => {
   const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "peer-plugin-data-"));
+  const legacyPluginData = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-plugin-data-"));
   const env = {
-    CLAUDE_PLUGIN_DATA: pluginData,
+    PEER_PLUGIN_DATA: pluginData,
+    CLAUDE_PLUGIN_DATA: legacyPluginData,
     CODEX_HOME: "/homes/work",
     PATH: "/usr/bin",
     GIT_DIR: "/victim/.git",
@@ -56,6 +58,8 @@ test("direct app-server spawn uses codex-owned runtime cwd and scrubs repo-targe
 
   assert.equal(capturedCwd, resolveAppServerRuntimeDir(env));
   assert.notEqual(capturedCwd, "/victim");
+  assert.equal(capturedCwd.startsWith(path.join(pluginData, "runtime")), true);
+  assert.equal(capturedCwd.startsWith(path.join(legacyPluginData, "runtime")), false);
   assert.equal(fs.statSync(capturedCwd).mode & 0o777, 0o700);
   assert.equal(capturedEnv.CODEX_HOME, "/homes/work");
   assert.equal(capturedEnv.PATH, "/usr/bin");

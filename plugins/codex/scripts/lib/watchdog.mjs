@@ -1,5 +1,12 @@
 import process from "node:process";
 
+import {
+  IDLE_TIMEOUT_ENV as PEER_IDLE_TIMEOUT_ENV,
+  MAX_TURN_ENV as PEER_MAX_TURN_ENV,
+  REQUEST_TIMEOUT_ENV as PEER_REQUEST_TIMEOUT_ENV,
+  readCompanionEnv
+} from "./companion-env.mjs";
+
 /**
  * Hang-prevention primitives shared by the direct app-server client, the
  * broker, and the turn capture loop. Everything here is pure and importable so
@@ -11,9 +18,9 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 180000;
 export const DEFAULT_MAX_TURN_MS = 900000;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 600000;
 
-export const IDLE_TIMEOUT_ENV = "CODEX_COMPANION_IDLE_TIMEOUT_MS";
-export const MAX_TURN_ENV = "CODEX_COMPANION_MAX_TURN_MS";
-export const REQUEST_TIMEOUT_ENV = "CODEX_COMPANION_REQUEST_TIMEOUT_MS";
+export const IDLE_TIMEOUT_ENV = PEER_IDLE_TIMEOUT_ENV;
+export const MAX_TURN_ENV = PEER_MAX_TURN_ENV;
+export const REQUEST_TIMEOUT_ENV = PEER_REQUEST_TIMEOUT_ENV;
 
 /** Raised when a turn stalls (no events for the idle window). */
 export class CodexStallError extends Error {
@@ -74,9 +81,9 @@ export function parsePositiveInt(value, fallback) {
 export function resolveTimeouts(env = process.env) {
   const source = env ?? {};
   return {
-    idleMs: parsePositiveInt(source[IDLE_TIMEOUT_ENV], DEFAULT_IDLE_TIMEOUT_MS),
-    maxTurnMs: parsePositiveInt(source[MAX_TURN_ENV], DEFAULT_MAX_TURN_MS),
-    requestTimeoutMs: parsePositiveInt(source[REQUEST_TIMEOUT_ENV], DEFAULT_REQUEST_TIMEOUT_MS)
+    idleMs: parsePositiveInt(readCompanionEnv("IDLE_TIMEOUT", source), DEFAULT_IDLE_TIMEOUT_MS),
+    maxTurnMs: parsePositiveInt(readCompanionEnv("MAX_TURN", source), DEFAULT_MAX_TURN_MS),
+    requestTimeoutMs: parsePositiveInt(readCompanionEnv("REQUEST_TIMEOUT", source), DEFAULT_REQUEST_TIMEOUT_MS)
   };
 }
 

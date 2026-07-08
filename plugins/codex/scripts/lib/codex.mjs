@@ -41,8 +41,9 @@ import path from "node:path";
 import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
-import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient, sanitizeCodexSpawnEnv } from "./app-server.mjs";
+import { BROKER_BUSY_RPC_CODE, CodexAppServerClient, sanitizeCodexSpawnEnv } from "./app-server.mjs";
 import { loadBrokerSession } from "./broker-lifecycle.mjs";
+import { readCompanionEnv, readCompanionEnvFrom } from "./companion-env.mjs";
 import { ensureAppServerRuntimeDir } from "./state.mjs";
 import { binaryAvailable } from "./process.mjs";
 import {
@@ -723,7 +724,8 @@ async function withAppServer(cwd, fn, options = {}) {
     await client.close();
     return result;
   } catch (error) {
-    const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
+    const brokerRequested =
+      client?.transport === "broker" || Boolean(readCompanionEnvFrom("BROKER_ENDPOINT", env, process.env));
     const shouldRetryDirect =
       (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
       (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
@@ -1012,7 +1014,7 @@ export function getCodexAvailability(_cwd) {
 }
 
 export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) {
-  const endpoint = env?.[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null;
+  const endpoint = readCompanionEnv("BROKER_ENDPOINT", env) ?? loadBrokerSession(cwd)?.endpoint ?? null;
   if (endpoint) {
     return {
       mode: "shared",

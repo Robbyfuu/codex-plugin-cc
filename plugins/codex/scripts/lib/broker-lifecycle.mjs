@@ -6,12 +6,18 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createBrokerEndpoint, parseBrokerEndpoint } from "./broker-endpoint.mjs";
+import {
+  LOG_FILE_ENV as PEER_LOG_FILE_ENV,
+  PID_FILE_ENV as PEER_PID_FILE_ENV,
+  SHUTDOWN_TIMEOUT_ENV as PEER_SHUTDOWN_TIMEOUT_ENV,
+  readCompanionEnv
+} from "./companion-env.mjs";
 import { resolveStateDir } from "./state.mjs";
 import { parsePositiveInt } from "./watchdog.mjs";
 
-export const PID_FILE_ENV = "CODEX_COMPANION_APP_SERVER_PID_FILE";
-export const LOG_FILE_ENV = "CODEX_COMPANION_APP_SERVER_LOG_FILE";
-export const SHUTDOWN_TIMEOUT_ENV = "CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS";
+export const PID_FILE_ENV = PEER_PID_FILE_ENV;
+export const LOG_FILE_ENV = PEER_LOG_FILE_ENV;
+export const SHUTDOWN_TIMEOUT_ENV = PEER_SHUTDOWN_TIMEOUT_ENV;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 3000;
 const BROKER_STATE_FILE = "broker.json";
 
@@ -49,7 +55,7 @@ export async function waitForBrokerEndpoint(endpoint, timeoutMs = 2000) {
  * anyway — the caller (handleSessionEnd) proceeds to the best-effort
  * teardownBrokerSession path, which kills the pid and removes the socket.
  *
- * The timeout is overridable via CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS (parsed
+ * The timeout is overridable via PEER_COMPANION_SHUTDOWN_TIMEOUT_MS (parsed
  * with parsePositiveInt; a malformed value falls back to the default).
  *
  * @param {string | null | undefined} endpoint
@@ -61,7 +67,7 @@ export async function sendBrokerShutdown(endpoint, options = {}) {
   }
   const env = options.env ?? process.env;
   const timeoutMs =
-    options.timeoutMs ?? parsePositiveInt(env[SHUTDOWN_TIMEOUT_ENV], DEFAULT_SHUTDOWN_TIMEOUT_MS);
+    options.timeoutMs ?? parsePositiveInt(readCompanionEnv("SHUTDOWN_TIMEOUT", env), DEFAULT_SHUTDOWN_TIMEOUT_MS);
 
   await new Promise((resolve) => {
     let settled = false;

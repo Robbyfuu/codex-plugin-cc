@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { TRANSCRIPT_PATH_ENV as PEER_TRANSCRIPT_PATH_ENV, readCompanionEnv } from "./companion-env.mjs";
 import { ensureAbsolutePath } from "./fs.mjs";
 
-export const TRANSCRIPT_PATH_ENV = "CODEX_COMPANION_TRANSCRIPT_PATH";
+export const TRANSCRIPT_PATH_ENV = PEER_TRANSCRIPT_PATH_ENV;
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
 function resolveUserPath(cwd, value) {
@@ -18,7 +19,7 @@ function resolveUserPath(cwd, value) {
 }
 
 export function resolveClaudeSessionPath(cwd, options = {}) {
-  const requestedPath = options.source || process.env[TRANSCRIPT_PATH_ENV];
+  const requestedPath = options.source || readCompanionEnv("TRANSCRIPT_PATH", process.env);
   if (!requestedPath) {
     throw new Error("Could not identify the current Claude transcript. Retry with --source <path-to-claude-jsonl>.");
   }

@@ -31,8 +31,19 @@ test("isWatchPaneEnabled respects an explicit disable knob", () => {
 });
 
 test("isWatchPaneEnabled respects an explicit enable knob even outside tmux", () => {
-  assert.equal(isWatchPaneEnabled({ CODEX_COMPANION_WATCH_PANE: "1" }), true);
-  assert.equal(isWatchPaneEnabled({ CODEX_COMPANION_WATCH_PANE: "true" }), true);
+  assert.equal(isWatchPaneEnabled({ PEER_COMPANION_WATCH_PANE: "1" }), true);
+  assert.equal(isWatchPaneEnabled({ PEER_COMPANION_WATCH_PANE: "true" }), true);
+});
+
+test("isWatchPaneEnabled prefers peer knob over legacy watch-pane setting", () => {
+  assert.equal(
+    isWatchPaneEnabled({
+      TMUX: "x",
+      PEER_COMPANION_WATCH_PANE: "1",
+      CODEX_COMPANION_WATCH_PANE: "0"
+    }),
+    true
+  );
 });
 
 test("buildTmuxSplitArgs builds a detached tail -F command for the log path", () => {

@@ -6,20 +6,44 @@
 
 ## What this fork adds
 
-- **Anti-hang.** A per-turn idle watchdog aborts a turn after `CODEX_COMPANION_IDLE_TIMEOUT_MS` (default `180000`) of no progress, but it pauses while an item is genuinely in flight so long-running work is not killed prematurely. A max-turn ceiling (`CODEX_COMPANION_MAX_TURN_MS`, default `900000`) caps the absolute turn duration, and request timeouts (`CODEX_COMPANION_REQUEST_TIMEOUT_MS`, default `600000`) bound individual app-server requests. The broker self-heals with generation-guarded routing so a dead child is replaced cleanly without misrouting in-flight clients, and cancel is ownership-scoped so you only ever cancel your own jobs.
+- **Anti-hang.** A per-turn idle watchdog aborts a turn after `PEER_COMPANION_IDLE_TIMEOUT_MS` (default `180000`) of no progress, but it pauses while an item is genuinely in flight so long-running work is not killed prematurely. A max-turn ceiling (`PEER_COMPANION_MAX_TURN_MS`, default `900000`) caps the absolute turn duration, and request timeouts (`PEER_COMPANION_REQUEST_TIMEOUT_MS`, default `600000`) bound individual app-server requests. The broker self-heals with generation-guarded routing so a dead child is replaced cleanly without misrouting in-flight clients, and cancel is ownership-scoped so you only ever cancel your own jobs.
 - **`/peer:watch`** opens a live tmux pane that streams a running Codex job so you can see progress in real time.
 - **`/peer:stats`** reports per-turn telemetry for recent runs and surfaces a tuning recommendation for the timeout knobs above.
-- **Automatic turn notifications** when a turn finishes, via tmux, terminal bell, or macOS notification. Configure with the `CODEX_COMPANION_NOTIFY*` environment variables.
+- **Automatic turn notifications** when a turn finishes, via tmux, terminal bell, or macOS notification. Configure with the `PEER_COMPANION_NOTIFY*` environment variables.
 - **`/peer:doctor [--fix] [--clean]`** runs a health check over the runtime and state, optionally applies safe fixes, and optionally cleans up stale artifacts.
 
 ### Environment knobs
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CODEX_COMPANION_IDLE_TIMEOUT_MS` | `180000` | Abort a turn after this much idle time (paused while an item is in flight). |
-| `CODEX_COMPANION_MAX_TURN_MS` | `900000` | Absolute ceiling on a single turn's duration. |
-| `CODEX_COMPANION_REQUEST_TIMEOUT_MS` | `600000` | Timeout for an individual app-server request. |
-| `CODEX_COMPANION_NOTIFY*` | — | Turn-completion notification settings (tmux / bell / macOS). |
+| `PEER_PLUGIN_DATA` | temp root | Global peer plugin data root (`accounts.json`, per-workspace `state/`, runtime files). Falls back to legacy `CLAUDE_PLUGIN_DATA` only when unset. |
+| `PEER_COMPANION_IDLE_TIMEOUT_MS` | `180000` | Abort a turn after this much idle time (paused while an item is in flight). |
+| `PEER_COMPANION_MAX_TURN_MS` | `900000` | Absolute ceiling on a single turn's duration. |
+| `PEER_COMPANION_REQUEST_TIMEOUT_MS` | `600000` | Timeout for an individual app-server request. |
+| `PEER_COMPANION_NOTIFY*` | — | Turn-completion notification settings (tmux / bell / macOS). |
+| `PEER_COMPANION_WATCH_PANE` | auto when `TMUX` is set | Auto-open a tmux pane that tails a running job's live log. |
+| `PEER_COMPANION_APP_SERVER_ENDPOINT` | — | Reuse a specific peer broker/app-server endpoint. |
+
+Peer-specific variables win when both peer and legacy names are set. Legacy names (`CLAUDE_PLUGIN_DATA`, `CODEX_COMPANION_*`) remain fallback-only for existing setups. `CODEX_HOME` is still native Codex behavior and is not renamed.
+
+Compatibility mapping:
+
+| Preferred peer env | Legacy fallback |
+| --- | --- |
+| `PEER_PLUGIN_DATA` | `CLAUDE_PLUGIN_DATA` |
+| `PEER_COMPANION_SESSION_ID` | `CODEX_COMPANION_SESSION_ID` |
+| `PEER_COMPANION_TRANSCRIPT_PATH` | `CODEX_COMPANION_TRANSCRIPT_PATH` |
+| `PEER_COMPANION_APP_SERVER_ENDPOINT` | `CODEX_COMPANION_APP_SERVER_ENDPOINT` |
+| `PEER_COMPANION_APP_SERVER_PID_FILE` | `CODEX_COMPANION_APP_SERVER_PID_FILE` |
+| `PEER_COMPANION_APP_SERVER_LOG_FILE` | `CODEX_COMPANION_APP_SERVER_LOG_FILE` |
+| `PEER_COMPANION_SHUTDOWN_TIMEOUT_MS` | `CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS` |
+| `PEER_COMPANION_IDLE_TIMEOUT_MS` | `CODEX_COMPANION_IDLE_TIMEOUT_MS` |
+| `PEER_COMPANION_MAX_TURN_MS` | `CODEX_COMPANION_MAX_TURN_MS` |
+| `PEER_COMPANION_REQUEST_TIMEOUT_MS` | `CODEX_COMPANION_REQUEST_TIMEOUT_MS` |
+| `PEER_COMPANION_NOTIFY` | `CODEX_COMPANION_NOTIFY` |
+| `PEER_COMPANION_NOTIFY_CHANNELS` | `CODEX_COMPANION_NOTIFY_CHANNELS` |
+| `PEER_COMPANION_WATCH_PANE` | `CODEX_COMPANION_WATCH_PANE` |
+| `PEER_COMPANION_DOCTOR_STALE_DAYS` | `CODEX_COMPANION_DOCTOR_STALE_DAYS` |
 
 ## What You Get
 
@@ -226,7 +250,7 @@ Requires tmux. Use it alongside [`/peer:status`](#peerstatus) when you want to a
 
 ### `/peer:stats`
 
-Shows per-turn telemetry for recent Codex runs and a tuning recommendation for the timeout knobs (`CODEX_COMPANION_IDLE_TIMEOUT_MS`, `CODEX_COMPANION_MAX_TURN_MS`, `CODEX_COMPANION_REQUEST_TIMEOUT_MS`).
+Shows per-turn telemetry for recent Codex runs and a tuning recommendation for the timeout knobs (`PEER_COMPANION_IDLE_TIMEOUT_MS`, `PEER_COMPANION_MAX_TURN_MS`, `PEER_COMPANION_REQUEST_TIMEOUT_MS`).
 
 Examples:
 

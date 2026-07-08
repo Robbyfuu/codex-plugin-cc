@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
+import { SESSION_ID_ENV as PEER_SESSION_ID_ENV, readCompanionEnv } from "./companion-env.mjs";
 import { openWatchPane, resolvePaneMarkerFile } from "./live-view.mjs";
 import { emitTurnNotification } from "./notify.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -8,7 +9,7 @@ import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile
 import { recordTurnOutcome } from "./telemetry.mjs";
 import { CodexStallError } from "./watchdog.mjs";
 
-export const SESSION_ID_ENV = "CODEX_COMPANION_SESSION_ID";
+export const SESSION_ID_ENV = PEER_SESSION_ID_ENV;
 
 /**
  * Map a REJECTED turn into a stable exit reason for telemetry. This handles only
@@ -335,7 +336,7 @@ export function createJobLogFile(workspaceRoot, jobId, title) {
 
 export function createJobRecord(base, options = {}) {
   const env = options.env ?? process.env;
-  const sessionId = env[options.sessionIdEnv ?? SESSION_ID_ENV];
+  const sessionId = options.sessionIdEnv ? env[options.sessionIdEnv] : readCompanionEnv("SESSION_ID", env);
   return {
     ...base,
     createdAt: nowIso(),

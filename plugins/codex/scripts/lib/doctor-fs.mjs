@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { STALE_DAYS_ENV as PEER_STALE_DAYS_ENV, readCompanionEnv } from "./companion-env.mjs";
 import { listJobs, resolveJobsDir, resolveStateDir } from "./state.mjs";
 import { MAX_TELEMETRY_BYTES } from "./telemetry.mjs";
 
@@ -20,11 +21,11 @@ import { MAX_TELEMETRY_BYTES } from "./telemetry.mjs";
  */
 
 const DEFAULT_STALE_DAYS = 7;
-const STALE_DAYS_ENV = "CODEX_COMPANION_DOCTOR_STALE_DAYS";
+const STALE_DAYS_ENV = PEER_STALE_DAYS_ENV;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function resolveStaleMs(env) {
-  const raw = env?.[STALE_DAYS_ENV];
+  const raw = readCompanionEnv("STALE_DAYS", env ?? {});
   const parsed = raw == null ? DEFAULT_STALE_DAYS : Number(raw);
   const days = Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_STALE_DAYS;
   return days * MS_PER_DAY;

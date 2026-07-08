@@ -31,6 +31,7 @@ import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { readCompanionEnv } from "./lib/companion-env.mjs";
 import {
   clearBrokerSession,
   loadBrokerSession,
@@ -39,7 +40,6 @@ import {
   teardownBrokerSession
 } from "./lib/broker-lifecycle.mjs";
 import { buildDoctorReport, planCleanup, executeCleanup } from "./lib/doctor.mjs";
-import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import { isWatchPaneEnabled, openWatchPane } from "./lib/live-view.mjs";
 import { emitTurnNotification } from "./lib/notify.mjs";
 import { fenceUntrusted, loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -340,7 +340,7 @@ function isActiveJobStatus(status) {
 }
 
 function getCurrentClaudeSessionId() {
-  return process.env[SESSION_ID_ENV] ?? null;
+  return readCompanionEnv("SESSION_ID", process.env) ?? null;
 }
 
 function filterJobsForCurrentClaudeSession(jobs) {
@@ -1167,7 +1167,7 @@ function handleTaskResumeCandidate(argv) {
 }
 
 function resolveBrokerEndpointForCancel(workspaceRoot) {
-  return process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(workspaceRoot)?.endpoint ?? null;
+  return readCompanionEnv("BROKER_ENDPOINT", process.env) ?? loadBrokerSession(workspaceRoot)?.endpoint ?? null;
 }
 
 async function recoverBrokerForCancel(workspaceRoot, options = {}) {
@@ -1416,10 +1416,11 @@ async function handleCancel(argv) {
 // protocol. ensureBrokerSession then transparently respawns on the next call.
 // Best-effort: a switch must succeed even if no broker is running.
 async function respawnBrokerForUse(cwd) {
+  const brokerEndpointEnv = readCompanionEnv("BROKER_ENDPOINT", process.env);
   const brokerSession =
     loadBrokerSession(cwd) ??
-    (process.env[BROKER_ENDPOINT_ENV]
-      ? { endpoint: process.env[BROKER_ENDPOINT_ENV] }
+    (brokerEndpointEnv
+      ? { endpoint: brokerEndpointEnv }
       : null);
   if (!brokerSession) {
     return false;

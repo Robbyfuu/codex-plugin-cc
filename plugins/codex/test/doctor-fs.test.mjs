@@ -113,6 +113,41 @@ test("walkStateDir still flags an OLD *.log past the stale window", () => {
   assert.ok(result.staleLogs.includes("/state/jobs/job-old.log"), "old .log is flagged");
 });
 
+test("walkStateDir prefers PEER_COMPANION_DOCTOR_STALE_DAYS over legacy stale-days env", () => {
+  const now = 1_000_000_000_000;
+  const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+  const result = walkWith(
+    {
+      "job-two-days.log": { mtimeMs: now - twoDaysMs }
+    },
+    {
+      nowMs: now,
+      env: {
+        PEER_COMPANION_DOCTOR_STALE_DAYS: "1",
+        CODEX_COMPANION_DOCTOR_STALE_DAYS: "7"
+      }
+    }
+  );
+  assert.ok(result.staleLogs.includes("/state/jobs/job-two-days.log"), "peer one-day window wins");
+});
+
+test("walkStateDir preserves legacy stale-days fallback when peer env is absent", () => {
+  const now = 1_000_000_000_000;
+  const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+  const result = walkWith(
+    {
+      "job-two-days.log": { mtimeMs: now - twoDaysMs }
+    },
+    {
+      nowMs: now,
+      env: {
+        CODEX_COMPANION_DOCTOR_STALE_DAYS: "1"
+      }
+    }
+  );
+  assert.ok(result.staleLogs.includes("/state/jobs/job-two-days.log"), "legacy one-day window still applies");
+});
+
 test("walkStateDir reports the broker telemetry file size and over-cap flag", () => {
   const now = 1_000_000_000_000;
   const overCap = 5 * 1024 * 1024 + 10;

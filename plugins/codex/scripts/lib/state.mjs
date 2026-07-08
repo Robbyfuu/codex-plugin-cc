@@ -3,12 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { FALLBACK_STATE_ROOT_DIR_NAME, readCompanionEnv } from "./companion-env.mjs";
 import { isPidAlive } from "./process.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
-const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "codex-companion");
+const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), FALLBACK_STATE_ROOT_DIR_NAME);
 const STATE_FILE_NAME = "state.json";
 const JOBS_DIR_NAME = "jobs";
 const RUNTIME_DIR_NAME = "runtime";
@@ -36,11 +36,11 @@ function defaultState() {
 
 // The plugin data root is the parent of the per-workspace `state/` directory.
 // It is the home for GLOBAL (not per-workspace) plugin data such as the
-// multi-account registry (accounts.json). When CLAUDE_PLUGIN_DATA is set the
+// multi-account registry (accounts.json). When PEER_PLUGIN_DATA is set the
 // root is that directory; otherwise it falls back to the same temp-backed root
 // the per-workspace state uses, so global and per-workspace data stay colocated.
 export function resolvePluginDataRoot(env = process.env) {
-  const pluginDataDir = env?.[PLUGIN_DATA_ENV];
+  const pluginDataDir = readCompanionEnv("PLUGIN_DATA", env);
   return pluginDataDir ? pluginDataDir : FALLBACK_STATE_ROOT_DIR;
 }
 
@@ -59,7 +59,7 @@ export function ensureAppServerRuntimeDir(env = process.env) {
   return runtimeDir;
 }
 
-export function resolveStateDir(cwd) {
+export function resolveStateDir(cwd, env = process.env) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   let canonicalWorkspaceRoot = workspaceRoot;
   try {
@@ -71,7 +71,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir = readCompanionEnv("PLUGIN_DATA", env);
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }

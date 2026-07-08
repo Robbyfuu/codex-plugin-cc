@@ -13,6 +13,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { parseBrokerEndpoint } from "./broker-endpoint.mjs";
+import { BROKER_ENDPOINT_ENV as PEER_BROKER_ENDPOINT_ENV, readCompanionEnvFrom } from "./companion-env.mjs";
 import { ensureBrokerSession, loadBrokerSession } from "./broker-lifecycle.mjs";
 import { terminateProcessTree } from "./process.mjs";
 import { ensureAppServerRuntimeDir } from "./state.mjs";
@@ -21,7 +22,7 @@ import { CodexTimeoutError, resolveTimeouts } from "./watchdog.mjs";
 const PLUGIN_MANIFEST_URL = new URL("../../.claude-plugin/plugin.json", import.meta.url);
 const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"));
 
-export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
+export const BROKER_ENDPOINT_ENV = PEER_BROKER_ENDPOINT_ENV;
 export const BROKER_BUSY_RPC_CODE = -32001;
 
 /** @type {ClientInfo} */
@@ -428,7 +429,7 @@ export class CodexAppServerClient {
   static async connect(cwd, options = {}) {
     let brokerEndpoint = null;
     if (!options.disableBroker) {
-      brokerEndpoint = options.brokerEndpoint ?? options.env?.[BROKER_ENDPOINT_ENV] ?? process.env[BROKER_ENDPOINT_ENV] ?? null;
+      brokerEndpoint = options.brokerEndpoint ?? readCompanionEnvFrom("BROKER_ENDPOINT", options.env, process.env) ?? null;
       if (!brokerEndpoint && options.reuseExistingBroker) {
         brokerEndpoint = loadBrokerSession(cwd)?.endpoint ?? null;
       }

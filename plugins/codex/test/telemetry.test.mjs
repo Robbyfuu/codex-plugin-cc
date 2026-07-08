@@ -337,7 +337,7 @@ test("aggregateTelemetry recommends lowering the idle timeout when p95 has headr
   // All fast (1s), idle timeout configured very high (60s), zero stalls.
   const records = Array.from({ length: 10 }, () => sampleOutcome({ durationMs: 1000, exitReason: "completed" }));
   const report = aggregateTelemetry(records, {
-    env: { CODEX_COMPANION_IDLE_TIMEOUT_MS: "60000" }
+    env: { PEER_COMPANION_IDLE_TIMEOUT_MS: "60000" }
   });
   assert.match(report.recommendation, /headroom|lower/i);
 });
@@ -349,9 +349,9 @@ test("aggregateTelemetry recommends raising the idle timeout when idle stalls ap
     sampleOutcome({ durationMs: 9800, exitReason: "idle-stall" })
   ];
   const report = aggregateTelemetry(records, {
-    env: { CODEX_COMPANION_IDLE_TIMEOUT_MS: "10000" }
+    env: { PEER_COMPANION_IDLE_TIMEOUT_MS: "10000" }
   });
-  assert.match(report.recommendation, /CODEX_COMPANION_IDLE_TIMEOUT_MS/);
+  assert.match(report.recommendation, /PEER_COMPANION_IDLE_TIMEOUT_MS/);
 });
 
 test("aggregateTelemetry recommends raising the max turn limit when hard stops occur", () => {
@@ -362,9 +362,9 @@ test("aggregateTelemetry recommends raising the max turn limit when hard stops o
     sampleOutcome({ durationMs: 5000, exitReason: "completed" })
   ];
   const report = aggregateTelemetry(records, {
-    env: { CODEX_COMPANION_MAX_TURN_MS: "900000" }
+    env: { PEER_COMPANION_MAX_TURN_MS: "900000" }
   });
-  assert.match(report.recommendation, /CODEX_COMPANION_MAX_TURN_MS/);
+  assert.match(report.recommendation, /PEER_COMPANION_MAX_TURN_MS/);
 });
 
 test("aggregateTelemetry surfaces interrupted turns as instability, distinct from timeout knobs", () => {
@@ -375,10 +375,10 @@ test("aggregateTelemetry surfaces interrupted turns as instability, distinct fro
     sampleOutcome({ durationMs: 3800, exitReason: "interrupted" })
   ];
   const report = aggregateTelemetry(records, {
-    env: { CODEX_COMPANION_IDLE_TIMEOUT_MS: "60000", CODEX_COMPANION_MAX_TURN_MS: "900000" }
+    env: { PEER_COMPANION_IDLE_TIMEOUT_MS: "60000", PEER_COMPANION_MAX_TURN_MS: "900000" }
   });
   // Instability advice must mention interruption/broker restart and must NOT
   // blame a timeout knob — these turns did not stall or hit the max-duration cap.
   assert.match(report.recommendation, /interrupt|broker|instability|restart/i);
-  assert.doesNotMatch(report.recommendation, /CODEX_COMPANION_IDLE_TIMEOUT_MS|CODEX_COMPANION_MAX_TURN_MS/);
+  assert.doesNotMatch(report.recommendation, /PEER_COMPANION_IDLE_TIMEOUT_MS|PEER_COMPANION_MAX_TURN_MS/);
 });

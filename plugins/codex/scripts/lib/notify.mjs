@@ -1,6 +1,11 @@
 import process from "node:process";
 import { spawn } from "node:child_process";
 
+import {
+  NOTIFY_CHANNELS_ENV as PEER_NOTIFY_CHANNELS_ENV,
+  NOTIFY_ENV as PEER_NOTIFY_ENV,
+  readCompanionEnv
+} from "./companion-env.mjs";
 import { isFalsey } from "./live-view.mjs";
 
 /**
@@ -51,8 +56,8 @@ import { isFalsey } from "./live-view.mjs";
  *   keep it safe, so keep them.
  */
 
-export const NOTIFY_ENV = "CODEX_COMPANION_NOTIFY";
-export const NOTIFY_CHANNELS_ENV = "CODEX_COMPANION_NOTIFY_CHANNELS";
+export const NOTIFY_ENV = PEER_NOTIFY_ENV;
+export const NOTIFY_CHANNELS_ENV = PEER_NOTIFY_CHANNELS_ENV;
 
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
 
@@ -194,10 +199,10 @@ export function buildNotificationMessage(outcome = {}) {
 /**
  * Decide which notification channels are active for this turn.
  *
- *   - `CODEX_COMPANION_NOTIFY` is a master opt-out: a falsey value
+ *   - `PEER_COMPANION_NOTIFY` is a master opt-out: a falsey value
  *     (0/false/off/no, case-insensitive) turns ALL channels off. Anything else
  *     (including unset) leaves notifications enabled.
- *   - `CODEX_COMPANION_NOTIFY_CHANNELS` is an optional comma list that restricts
+ *   - `PEER_COMPANION_NOTIFY_CHANNELS` is an optional comma list that restricts
  *     which channels may fire (e.g. "tmux,bell"). Unset = AUTO: tmux when $TMUX
  *     is set, osascript on darwin, bell always.
  *   - An explicit list OVERRIDES auto, but a listed channel still no-ops if its
@@ -209,7 +214,7 @@ export function buildNotificationMessage(outcome = {}) {
 export function resolveNotifyChannels({ env = process.env, platform = process.platform } = {}) {
   const off = { tmux: false, bell: false, osascript: false };
 
-  const master = env[NOTIFY_ENV];
+  const master = readCompanionEnv("NOTIFY", env);
   if (master !== undefined && master !== null && String(master).trim() !== "" && isFalsey(master)) {
     return off;
   }
@@ -221,7 +226,7 @@ export function resolveNotifyChannels({ env = process.env, platform = process.pl
     osascript: platform === "darwin"
   };
 
-  const rawList = env[NOTIFY_CHANNELS_ENV];
+  const rawList = readCompanionEnv("NOTIFY_CHANNELS", env);
   if (rawList !== undefined && rawList !== null && String(rawList).trim() !== "") {
     const requested = new Set(
       String(rawList)

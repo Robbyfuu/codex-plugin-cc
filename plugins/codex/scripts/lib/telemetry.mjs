@@ -45,7 +45,7 @@ const MIN_RECOMMENDATION_SAMPLES = 5;
 
 // "Headroom" means the slowest typical turn (p95) finished comfortably under the
 // idle window. Anything below this fraction of the idle timeout is slack we
-// could reclaim by lowering CODEX_COMPANION_IDLE_TIMEOUT_MS.
+// could reclaim by lowering PEER_COMPANION_IDLE_TIMEOUT_MS.
 const HEADROOM_P95_FRACTION = 0.5;
 
 // "Near the window" means p95 is close enough to the idle timeout that the idle

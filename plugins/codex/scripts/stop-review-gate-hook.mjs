@@ -11,6 +11,7 @@ import { fenceUntrusted, loadPromptTemplate, interpolateTemplate } from "./lib/p
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
+import { readCompanionEnv } from "./lib/companion-env.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
@@ -40,7 +41,7 @@ function logNote(message) {
 }
 
 function filterJobsForCurrentSession(jobs, input = {}) {
-  const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
+  const sessionId = input.session_id || readCompanionEnv("SESSION_ID", process.env) || null;
   if (!sessionId) {
     return jobs;
   }

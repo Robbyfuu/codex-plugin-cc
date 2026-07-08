@@ -47,6 +47,16 @@ test("resolveAccountsFile lives at the plugin data root, sibling of state/", () 
   assert.equal(file, "/data/accounts.json");
 });
 
+test("resolveAccountsFile prefers PEER_PLUGIN_DATA over legacy CLAUDE_PLUGIN_DATA", () => {
+  const file = resolveAccountsFile({
+    env: {
+      PEER_PLUGIN_DATA: "/peer-data",
+      CLAUDE_PLUGIN_DATA: "/legacy-data"
+    }
+  });
+  assert.equal(file, "/peer-data/accounts.json");
+});
+
 test("loadAccounts seeds a default account pointing at ~/.codex when absent", () => {
   const fsImpl = createMemoryFs();
   const config = loadAccounts({ env: ENV, fsImpl });

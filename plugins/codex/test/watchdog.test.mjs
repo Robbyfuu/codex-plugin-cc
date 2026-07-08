@@ -23,9 +23,34 @@ test("resolveTimeouts returns documented defaults on empty env", () => {
 
 test("resolveTimeouts honors valid overrides", () => {
   const resolved = resolveTimeouts({
-    CODEX_COMPANION_IDLE_TIMEOUT_MS: "5000",
-    CODEX_COMPANION_MAX_TURN_MS: "60000",
-    CODEX_COMPANION_REQUEST_TIMEOUT_MS: "30000"
+    PEER_COMPANION_IDLE_TIMEOUT_MS: "5000",
+    PEER_COMPANION_MAX_TURN_MS: "60000",
+    PEER_COMPANION_REQUEST_TIMEOUT_MS: "30000"
+  });
+  assert.equal(resolved.idleMs, 5000);
+  assert.equal(resolved.maxTurnMs, 60000);
+  assert.equal(resolved.requestTimeoutMs, 30000);
+});
+
+test("resolveTimeouts preserves legacy fallback when peer knobs are absent", () => {
+  const resolved = resolveTimeouts({
+    CODEX_COMPANION_IDLE_TIMEOUT_MS: "7000",
+    CODEX_COMPANION_MAX_TURN_MS: "80000",
+    CODEX_COMPANION_REQUEST_TIMEOUT_MS: "90000"
+  });
+  assert.equal(resolved.idleMs, 7000);
+  assert.equal(resolved.maxTurnMs, 80000);
+  assert.equal(resolved.requestTimeoutMs, 90000);
+});
+
+test("resolveTimeouts prefers peer knobs over legacy names", () => {
+  const resolved = resolveTimeouts({
+    PEER_COMPANION_IDLE_TIMEOUT_MS: "5000",
+    PEER_COMPANION_MAX_TURN_MS: "60000",
+    PEER_COMPANION_REQUEST_TIMEOUT_MS: "30000",
+    CODEX_COMPANION_IDLE_TIMEOUT_MS: "7000",
+    CODEX_COMPANION_MAX_TURN_MS: "80000",
+    CODEX_COMPANION_REQUEST_TIMEOUT_MS: "90000"
   });
   assert.equal(resolved.idleMs, 5000);
   assert.equal(resolved.maxTurnMs, 60000);
@@ -34,9 +59,9 @@ test("resolveTimeouts honors valid overrides", () => {
 
 test("resolveTimeouts falls back to defaults for invalid or non-positive values", () => {
   const resolved = resolveTimeouts({
-    CODEX_COMPANION_IDLE_TIMEOUT_MS: "not-a-number",
-    CODEX_COMPANION_MAX_TURN_MS: "-1",
-    CODEX_COMPANION_REQUEST_TIMEOUT_MS: "0"
+    PEER_COMPANION_IDLE_TIMEOUT_MS: "not-a-number",
+    PEER_COMPANION_MAX_TURN_MS: "-1",
+    PEER_COMPANION_REQUEST_TIMEOUT_MS: "0"
   });
   assert.equal(resolved.idleMs, DEFAULT_IDLE_TIMEOUT_MS);
   assert.equal(resolved.maxTurnMs, DEFAULT_MAX_TURN_MS);

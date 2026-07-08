@@ -24,7 +24,10 @@ async function flushMicrotasks(times = 5) {
 
 test("request() rejects with CodexTimeoutError when no reply arrives", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const client = new SilentClient({ CODEX_COMPANION_REQUEST_TIMEOUT_MS: "1000" });
+  const client = new SilentClient({
+    PEER_COMPANION_REQUEST_TIMEOUT_MS: "1000",
+    CODEX_COMPANION_REQUEST_TIMEOUT_MS: "600000"
+  });
   const pending = client.request("turn/start", { threadId: "t1" });
 
   t.mock.timers.tick(1001);

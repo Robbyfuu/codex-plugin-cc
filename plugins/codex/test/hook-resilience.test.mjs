@@ -42,8 +42,8 @@ function makeSilentUnixServer() {
 
 test("sendBrokerShutdown resolves within its timeout against a never-responding broker", async () => {
   const { endpoint, server } = await makeSilentUnixServer();
-  const previous = process.env.CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS;
-  process.env.CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS = "300";
+  const previous = process.env.PEER_COMPANION_SHUTDOWN_TIMEOUT_MS;
+  process.env.PEER_COMPANION_SHUTDOWN_TIMEOUT_MS = "300";
 
   try {
     const start = Date.now();
@@ -52,9 +52,9 @@ test("sendBrokerShutdown resolves within its timeout against a never-responding 
     assert.ok(elapsed < 3000, `shutdown must return promptly via timeout, took ${elapsed}ms`);
   } finally {
     if (previous === undefined) {
-      delete process.env.CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS;
+      delete process.env.PEER_COMPANION_SHUTDOWN_TIMEOUT_MS;
     } else {
-      process.env.CODEX_COMPANION_SHUTDOWN_TIMEOUT_MS = previous;
+      process.env.PEER_COMPANION_SHUTDOWN_TIMEOUT_MS = previous;
     }
     server.close();
   }
