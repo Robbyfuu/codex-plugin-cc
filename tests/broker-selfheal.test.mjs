@@ -7,14 +7,16 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
-import { makeTempDir } from "./helpers.mjs";
+import { cleanupTrackedCodexProcesses, makeTempDir } from "./helpers.mjs";
 import {
   ensureBrokerSession,
   isBrokerEndpointReady,
+  sendBrokerShutdown,
   spawnBrokerProcess,
   waitForBrokerEndpoint
 } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 import { parseBrokerEndpoint } from "../plugins/codex/scripts/lib/broker-endpoint.mjs";
+import { terminateProcessTree } from "../plugins/codex/scripts/lib/process.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BROKER_SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "app-server-broker.mjs");
@@ -221,12 +223,12 @@ function spawnSelfHealBroker({ cwd, sessionDir, env }) {
   return { child, endpoint, pidFile, logFile };
 }
 
-function killPid(pid) {
+function terminatePid(pid) {
   if (!pid) {
     return;
   }
   try {
-    process.kill(pid, "SIGKILL");
+    terminateProcessTree(pid);
   } catch {
     // already gone
   }
@@ -251,6 +253,36 @@ async function waitForExit(pid, signal) {
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+async function waitForExitWithin(pid, timeoutMs) {
+  const start = Date.now();
+  while (brokerProcessAlive(pid) && Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !brokerProcessAlive(pid);
+}
+
+async function stopBroker(brokerOrSession) {
+  const pid = brokerOrSession?.child?.pid ?? brokerOrSession?.pid ?? null;
+  const endpoint = brokerOrSession?.endpoint ?? null;
+  if (!pid) {
+    return;
+  }
+
+  if (endpoint) {
+    await sendBrokerShutdown(endpoint, { timeoutMs: 750 }).catch(() => {});
+    if (await waitForExitWithin(pid, 2000)) {
+      return;
+    }
+  }
+
+  // Broker processes are spawned detached, so their app-server child inherits
+  // the broker process group. Kill the tree, not just the broker pid; otherwise
+  // failed tests leave fake `codex app-server` children under codex-plugin-test-*.
+  terminatePid(pid);
+  await waitForExitWithin(pid, 1000);
+  cleanupTrackedCodexProcesses();
 }
 
 test("e2e: a wedged codex child self-heals and the broker serves a fresh child", async (t) => {
@@ -317,9 +349,7 @@ test("e2e: a wedged codex child self-heals and the broker serves a fresh child",
     assert.equal(brokerProcessAlive(broker.child.pid), true, "broker should stay alive after recovery");
   } finally {
     client?.close();
-    if (broker?.child?.pid) {
-      killPid(broker.child.pid);
-    }
+    await stopBroker(broker);
     fs.rmSync(sessionDir, { recursive: true, force: true });
     fs.rmSync(pluginData, { recursive: true, force: true });
     fs.rmSync(binDir, { recursive: true, force: true });
@@ -397,7 +427,7 @@ test("e2e: a failed reconnect fails the waiter fast, exits the broker, and the n
     };
     let respawned;
     try {
-      respawned = await ensureBrokerSession(respawnCwd, { env: respawnEnv, killProcess: killPid });
+      respawned = await ensureBrokerSession(respawnCwd, { env: respawnEnv, killProcess: terminatePid });
       assert.ok(respawned, "ensureBrokerSession should spawn a fresh broker");
       assert.equal(await isBrokerEndpointReady(respawned.endpoint), true, "fresh broker endpoint should be ready");
 
@@ -417,18 +447,14 @@ test("e2e: a failed reconnect fails the waiter fast, exits the broker, and the n
         freshClient.close();
       }
     } finally {
-      if (respawned?.pid) {
-        killPid(respawned.pid);
-      }
+      await stopBroker(respawned);
       fs.rmSync(respawnBinDir, { recursive: true, force: true });
       fs.rmSync(respawnCwd, { recursive: true, force: true });
       fs.rmSync(respawnPluginData, { recursive: true, force: true });
     }
   } finally {
     client?.close();
-    if (broker?.child?.pid) {
-      killPid(broker.child.pid);
-    }
+    await stopBroker(broker);
     fs.rmSync(sessionDir, { recursive: true, force: true });
     fs.rmSync(pluginData, { recursive: true, force: true });
     fs.rmSync(binDir, { recursive: true, force: true });
@@ -482,9 +508,7 @@ test("e2e: a healthy turn completes cleanly through the real broker (no self-hea
     assert.equal(brokerProcessAlive(broker.child.pid), true, "broker should stay alive on a healthy run");
   } finally {
     client?.close();
-    if (broker?.child?.pid) {
-      killPid(broker.child.pid);
-    }
+    await stopBroker(broker);
     fs.rmSync(sessionDir, { recursive: true, force: true });
     fs.rmSync(pluginData, { recursive: true, force: true });
     fs.rmSync(binDir, { recursive: true, force: true });
